@@ -173,4 +173,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-*"Even Ultraman couldn't defeat Zetton alone. Your binaries don't stand a chance."*
+*"Even Ultraman couldn't defeat Zetton alone."*
