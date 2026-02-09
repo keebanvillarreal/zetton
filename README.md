@@ -25,9 +25,9 @@ A next-generation reverse engineering framework that combines classical binary a
 - PQC algorithm fingerprinting
 
 ### Command Line Interface
-- ✅ Binary analysis framework
-- ✅ Configuration management
-- ✅ Quantum backend integration
+- Binary analysis framework
+- Configuration management
+- Quantum backend integration
 - 🚧 Advanced analysis features (in progress)
 
 ---
