@@ -1,25 +1,8 @@
-# Zetton
+# Zetton Quantum-Assisted Binary Analysis Framework
 
-**Quantum-Assisted Binary Analysis Framework for Digital Forensics**
-
-Zetton is a next-generation reverse engineering and digital forensics framework that leverages quantum computing algorithms to enhance binary analysis capabilities. Named after the infamous kaiju, Zetton brings overwhelming analytical power to the field of cybersecurity research.
-
-## Vision
-
-Traditional reverse engineering tools like Ghidra, IDA Pro, and Binary Ninja excel at classical analysis but cannot leverage quantum computational advantages. Zetton bridges this gap by:
-
-1. **Quantum-Accelerated Search**: Using Grover's algorithm for O(√N) speedup in pattern matching and crypto constant identification
-2. **Hybrid Cryptanalysis**: Combining classical and quantum approaches to analyze cryptographic implementations
-3. **Post-Quantum Forensics**: Purpose-built tools for analyzing PQC implementations and quantum-resistant algorithms
-4. **Constraint Solving**: QAOA and VQE-based approaches for symbolic execution and deobfuscation
+A next-generation reverse engineering framework that combines classical binary analysis with quantum computing algorithms. Zetton bridges the gap between traditional tools like Ghidra and the emerging capabilities of quantum computers for enhanced cryptanalysis and pattern detection.
 
 ## Features
-
-### Core Analysis
-- Multi-format binary loading (ELF, PE, Mach-O)
-- Disassembly via Capstone engine
-- Control flow graph (CFG) and data flow graph (DFG) generation
-- Crypto algorithm identification
 
 ### Quantum Engine
 - Qiskit-based circuit construction
@@ -37,7 +20,7 @@ Traditional reverse engineering tools like Ghidra, IDA Pro, and Binary Ninja exc
 
 ```bash
 # From source (recommended for development)
-git clone https://github.com/zetton-framework/zetton.git
+git clone https://github.com/keebanvillarreal/zetton.git
 cd zetton
 pip install -e ".[dev]"
 
