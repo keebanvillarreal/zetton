@@ -281,7 +281,7 @@ zetton/
 
 ## Roadmap
 
-### ✅ Completed
+### Completed
 - [x] Project structure and packaging (pyproject.toml, setup.py)
 - [x] Command-line interface with Click
 - [x] Rich terminal output formatting
@@ -295,7 +295,7 @@ zetton/
 - [ ] Quantum engine implementation
 - [ ] Configuration file handling
 
-### 📋 Planned
+### 🚧 Planned
 - [ ] Crypto constant database
 - [ ] CFG/DFG analysis
 - [ ] Grover's search implementation
