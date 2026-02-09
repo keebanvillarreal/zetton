@@ -159,5 +159,3 @@ MIT License - see [LICENSE](LICENSE) for details.
 - The quantum computing and security research communities
 
 ---
-
-*"Even Ultraman couldn't defeat Zetton alone."*
