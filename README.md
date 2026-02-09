@@ -1,4 +1,4 @@
-![ZETTON logo](assets/zetton_namelogowht.png)
+![ZETTON logo](zetton/assets/zetton_namelogowht.png)
 
 # Zetton Quantum-Assisted Software Reverse Engineering Framework
 
