@@ -63,7 +63,6 @@ Ready to hack on Zetton? Awesome! Here's how:
 - Improve existing documentation
 - Add usage examples
 - Create tutorials for new features
-- Translate documentation (especially Spanish for our UTSA community!)
 
 ### Research Contributions
 - Implement new quantum algorithms for binary analysis
