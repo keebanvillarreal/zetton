@@ -2,7 +2,7 @@
 
 ## About the Team
 
-**Zetton** was developed by the **UTSA Cyber Jedis Quantum Cybersecurity Team**, a group of cybersecurity researchers exploring the intersection of quantum computing and digital forensics.
+**Zetton** was developed by the **UTSA Cyber Jedis Quantum Cybersecurity Research Interest Group (RIG)**, a group of cybersecurity researchers exploring the intersection of quantum computing and digital forensics.
 
 We're passionate about pushing the boundaries of security research and making quantum-assisted analysis accessible to the broader security community.
 
@@ -576,4 +576,4 @@ Don't hesitate to ask! We're here to help:
 ---
 
 *Last updated: February 2026*  
-*UTSA Cyber Jedis Quantum Cybersecurity Team*
+*UTSA Cyber Jedis Quantum Cybersecurity RIG*
