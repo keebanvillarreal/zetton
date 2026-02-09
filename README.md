@@ -377,7 +377,7 @@ This project is open source and welcomes contributions under the MIT license.
 
 ## About
 
-**Zetton** is developed by the **UTSA Cyber Jedis Quantum Cybersecurity Team**, a group of researchers exploring the intersection of quantum computing and digital security.
+**Zetton** is developed by the **UTSA Cyber Jedis Quantum Cybersecurity Research Interest Group**, a group of researchers exploring the intersection of quantum computing and digital security.
 
 **Contact**: keeban.villarreal@my.utsa.edu  
 **Repository**: https://github.com/keebanvillarreal/zetton
