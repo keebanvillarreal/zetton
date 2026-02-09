@@ -136,7 +136,7 @@ zetton config --list
 
 ## Command Line Interface
 
-### Available Now ✅
+### Available Now
 
 ```bash
 # Display version
