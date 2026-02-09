@@ -1,2 +1,0 @@
-[console_scripts]
-zetton = zetton.cli:main
