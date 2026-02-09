@@ -357,42 +357,6 @@ Zetton is designed for security researchers working on:
 
 ---
 
-## Contributing
-
-We welcome contributions from the security and quantum computing communities!
-
-### Who Can Contribute?
-
-- **UTSA Students**: Join the Cyber Jedis Quantum Cybersecurity Team
-- **Security Researchers**: Contribute analysis techniques and patterns
-- **Quantum Developers**: Help optimize quantum algorithms
-- **Everyone**: Documentation, testing, bug reports are all valuable!
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-### Quick Start for Contributors
-
-```bash
-# Fork and clone your fork
-git clone https://github.com/YOUR_USERNAME/zetton.git
-cd zetton
-
-# Setup development environment
-python3 -m venv venv
-source venv/bin/activate
-pip install -e ".[dev]"
-
-# Make your changes
-git checkout -b feature/your-feature
-
-# Test your changes
-pytest tests/
-
-# Submit a pull request
-```
-
----
-
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
