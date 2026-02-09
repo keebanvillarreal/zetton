@@ -2,10 +2,6 @@
 
 # Zetton 
 
-[![Development Status](https://img.shields.io/badge/status-alpha-orange.svg)](https://github.com/keebanvillarreal/zetton)
-[![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-
 > **⚠️ Active Development**: Zetton is in active alpha development. The CLI is functional, but some advanced features are still being implemented. See the [Roadmap](#roadmap) for current status.
 
 ## Quantum Software Reverse Engineering Framework
@@ -343,7 +339,6 @@ Solution: These should auto-install, but if not:
 
 ### Getting Help
 
-- **Documentation**: See [INSTALLATION.md](INSTALLATION.md) for detailed setup
 - **Issues**: Report bugs at [GitHub Issues](https://github.com/keebanvillarreal/zetton/issues)
 - **Email**: keeban.villarreal@my.utsa.edu
 - **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
