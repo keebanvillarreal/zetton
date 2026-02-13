@@ -8,6 +8,11 @@
 
 A next-generation reverse engineering framework that combines classical binary analysis with quantum computing algorithms. Zetton bridges the gap between traditional tools like Ghidra and the emerging capabilities of quantum computers for enhanced cryptanalysis and pattern detection.
 
+## Live Demo
+
+Check out the interactive demo showcasing all of Zetton\'s capabilities:
+
+**[Launch Demo →](https://keebanvillarreal.github.io/zetton/)**
 ---
 
 ## Features
