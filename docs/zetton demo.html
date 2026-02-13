@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZETTON — Quantum Software Reverse Engineering Framework</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+    
+    <script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const MODULES = [
+  {
+    id: "analyze",
+    cmd: "zetton analyze",
+    title: "Binary Analysis",
+    icon: "⚙️",
+    desc: "Load and analyze ELF, PE, and Mach-O binaries with automated format detection",
+    usage: `$ zetton analyze ./malware_sample
+
+╔══════════════════════════════════════════╗
+║          ZETTON Binary Analysis          ║
+╚══════════════════════════════════════════╝
+
+[*] Loading binary: ./malware_sample
+[*] Format detected: ELF64 (Linux x86_64)
+[*] Architecture: AMD64
+[*] Endianness: Little-Endian
+
+┌─────────────────────────────────────────┐
+│ Binary Information                      │
+├──────────────┬──────────────────────────┤
+│ Path         │ ./malware_sample         │
+│ Format       │ ELF                      │
+│ Architecture │ x86_64                   │
+│ Bits         │ 64                       │
+│ Entry Point  │ 0x00401060               │
+│ Size         │ 847,392 bytes            │
+│ MD5          │ a3f2b8c1d4e5f6a7b8c9...  │
+│ SHA-256      │ 7e2d1a9f8b3c4d5e6f7a...  │
+│ Sections     │ 28                       │
+│ Symbols      │ 1,247                    │
+│ Imports      │ 89                       │
+│ Exports      │ 12                       │
+└──────────────┴──────────────────────────┘
+
+[*] Security Features:
+    ├── PIE:     Enabled ✓
+    ├── NX:      Enabled ✓
+    ├── RELRO:   Full ✓
+    ├── Canary:  Enabled ✓
+    └── FORTIFY: Partial ⚠
+
+[✓] Analysis complete in 0.847s`,
+    details: [
+      "Multi-format support: ELF, PE/COFF, Mach-O (including Universal/Fat binaries)",
+      "LIEF-powered parsing with manual fallback for corrupted headers",
+      "Security feature detection (PIE, NX, RELRO, Stack Canary, FORTIFY, ASLR, DEP, SEH, CFG)",
+      "Section, symbol, import/export extraction",
+      "Rich header analysis for PE, load command parsing for Mach-O",
+      "Cryptographic hashing (MD5, SHA-256) for identification",
+    ],
+  },
+  {
+    id: "crypto",
+    cmd: "zetton crypto --quantum",
+    title: "Quantum Crypto Detection",
+    icon: "🔐",
+    desc: "Detect cryptographic implementations using Grover's O(√N) quantum-accelerated search",
+    usage: `$ zetton crypto --quantum ./encrypted_binary
+
+╔══════════════════════════════════════════╗
+║    ZETTON Quantum Crypto Detection      ║
+╚══════════════════════════════════════════╝
+
+[*] Loading binary: ./encrypted_binary
+[*] Initializing quantum engine...
+[⚛] Backend: qasm_simulator (32 qubits)
+[⚛] Grover iterations: 4 (optimal for N=256)
+
+[*] Scanning for cryptographic constants...
+
+┌──────────────────────────────────────────────────┐
+│ Cryptographic Findings                           │
+├────────────┬────────────┬──────────┬─────────────┤
+│ Algorithm  │ Confidence │ Offset   │ Method      │
+├────────────┼────────────┼──────────┼─────────────┤
+│ AES-256    │ 97%        │ 0x04a120 │ quantum     │
+│ AES-256    │ 94%        │ 0x04a320 │ quantum     │
+│ SHA-256    │ 91%        │ 0x051080 │ quantum     │
+│ RSA-2048   │ 88%        │ 0x06c400 │ classical   │
+│ ChaCha20   │ 82%        │ 0x072100 │ quantum     │
+│ HMAC-SHA1  │ 76%        │ 0x04f200 │ classical   │
+└────────────┴────────────┴──────────┴─────────────┘
+
+[⚛] Quantum speedup: 12.4x vs classical scan
+[⚛] Circuits executed: 847
+[⚛] Total shots: 8,470,000
+
+[!] WARNING: Weak crypto detected:
+    └── HMAC-SHA1 at 0x04f200 (deprecated)
+
+[✓] Crypto scan complete in 3.21s`,
+    details: [
+      "Grover's algorithm for O(√N) pattern matching against crypto constant database",
+      "15+ algorithm signatures: AES, DES, RSA, SHA family, ChaCha20, Kyber, Dilithium",
+      "Quantum counting to estimate number of crypto implementations",
+      "Byte-level and S-box comparator quantum circuits",
+      "Hamming distance oracle for fuzzy matching of modified constants",
+      "Classical fallback when quantum advantage is minimal",
+    ],
+  },
+  {
+    id: "forensics",
+    cmd: "zetton forensics",
+    title: "Digital Forensics",
+    icon: "🔍",
+    desc: "Timeline reconstruction, timestamp analysis, and anomaly detection for DFIR investigations",
+    usage: `$ zetton forensics --output report.html ./target
+
+╔══════════════════════════════════════════╗
+║       ZETTON Forensics Analysis         ║
+╚══════════════════════════════════════════╝
+
+[*] Loading binary: ./target
+[*] Extracting temporal artifacts...
+
+┌─ Timeline Reconstruction ──────────────────────┐
+│                                                 │
+│  2024-03-15 02:14:07  Compilation timestamp     │
+│  2024-03-15 02:14:07  PE TimeDateStamp          │
+│  2024-06-22 18:30:00  Debug directory timestamp  │
+│  2024-08-01 09:00:00  Resource timestamp         │
+│  2024-11-12 14:22:33  Certificate signing date   │
+│                                                 │
+└─────────────────────────────────────────────────┘
+
+[!] ANOMALIES DETECTED:
+
+  ⚠ Timestamp Gap: 99-day gap between compile
+    and debug timestamps (possible staging)
+
+  ⚠ Future Date: Resource timestamp post-dates
+    compilation by 139 days
+
+  ⚠ Timezone Inconsistency: Mixed UTC/local
+    timestamps suggest multiple build environments
+
+┌─ Crypto Forensics ─────────────────────────────┐
+│ Hardcoded key at 0x0041a000 (AES-128)          │
+│ ECB mode usage detected (weak)                 │
+│ Weak PRNG: rand() seeded with time()           │
+│ PQC Readiness: NOT READY (0/3 algorithms)      │
+└─────────────────────────────────────────────────┘
+
+[*] Report generated: report.html
+[✓] Forensics analysis complete in 5.62s`,
+    details: [
+      "Timeline reconstruction from PE/ELF timestamps and embedded date strings",
+      "Timestamp anomaly detection (gaps, future dates, timezone inconsistencies)",
+      "Crypto weakness identification: hardcoded keys, ECB mode, weak PRNG",
+      "Key schedule analysis for implementation quality assessment",
+      "Quantum threat assessment against current crypto implementations",
+      "HTML report generation with Zetton dark theme branding",
+    ],
+  },
+  {
+    id: "cfg",
+    cmd: "zetton cfg",
+    title: "Control Flow Analysis",
+    icon: "🌐",
+    desc: "Build and analyze control flow graphs with quantum-enhanced graph traversal",
+    usage: `$ zetton cfg --function main --export dot ./binary
+
+╔══════════════════════════════════════════╗
+║     ZETTON Control Flow Analysis        ║
+╚══════════════════════════════════════════╝
+
+[*] Disassembling function: main @ 0x00401060
+[*] Building control flow graph...
+
+┌─ CFG Statistics ────────────────────────────────┐
+│ Basic Blocks:        47                         │
+│ Edges:               63                         │
+│ Cyclomatic Complexity: 18                       │
+│ Natural Loops:       5                          │
+│ Dominators computed: ✓                          │
+│ Back edges:          5                          │
+└─────────────────────────────────────────────────┘
+
+┌─ Loop Analysis ─────────────────────────────────┐
+│                                                 │
+│  Loop 1 @ 0x401120  depth=1  blocks=8  nested=2 │
+│  ├── Loop 2 @ 0x40114a  depth=2  blocks=3      │
+│  └── Loop 3 @ 0x401180  depth=2  blocks=4      │
+│  Loop 4 @ 0x401250  depth=1  blocks=6  nested=0 │
+│  Loop 5 @ 0x401300  depth=1  blocks=3  nested=0 │
+│                                                 │
+└─────────────────────────────────────────────────┘
+
+[*] DOT graph exported: main_cfg.dot
+[*] Rendering: main_cfg.png
+
+[⚛] Quantum walk analysis:
+    └── Reachability computed in O(√N)
+    └── Path coverage: 94.2%
+
+[✓] CFG analysis complete in 1.23s`,
+    details: [
+      "Basic block extraction via Capstone disassembly engine",
+      "Edge classification: fall-through, conditional, unconditional, call, return",
+      "Dominator tree computation for structural analysis",
+      "Natural loop detection with nesting depth calculation",
+      "Cyclomatic complexity metrics for code quality assessment",
+      "DOT export for Graphviz visualization",
+    ],
+  },
+  {
+    id: "dataflow",
+    cmd: "zetton dataflow --taint",
+    title: "Data Flow & Taint Analysis",
+    icon: "🧬",
+    desc: "Track data propagation with taint analysis from sources (read, recv) to sinks (system, memcpy)",
+    usage: `$ zetton dataflow --taint --sources recv,read ./binary
+
+╔══════════════════════════════════════════╗
+║    ZETTON Data Flow / Taint Analysis    ║
+╚══════════════════════════════════════════╝
+
+[*] Building data flow graph...
+[*] Computing reaching definitions...
+[*] Live variable analysis complete.
+
+┌─ Taint Propagation ────────────────────────────┐
+│                                                 │
+│  SOURCE: recv() @ 0x401200                      │
+│    │                                            │
+│    ├─► buf @ 0x401208 [TAINTED]                 │
+│    ├─► memcpy(dest, buf, n) @ 0x40122c          │
+│    │   └─► dest @ 0x401230 [TAINTED]            │
+│    ├─► sprintf(cmd, "%s", dest) @ 0x401260      │
+│    │   └─► cmd @ 0x401264 [TAINTED]             │
+│    └─► system(cmd) @ 0x401280 ⚠ SINK HIT       │
+│                                                 │
+└─────────────────────────────────────────────────┘
+
+[!!!] VULNERABILITY: Command Injection
+  Source: recv() @ 0x401200
+  Sink:   system() @ 0x401280
+  Path:   recv → buf → dest → cmd → system
+  Hops:   4
+
+┌─ Use-Def Chains ───────────────────────────────┐
+│ Variable 'buf':                                 │
+│   Defined at: 0x401208 (recv)                   │
+│   Used at:    0x40122c (memcpy), 0x401244 (cmp) │
+│ Variable 'cmd':                                 │
+│   Defined at: 0x401264 (sprintf)                │
+│   Used at:    0x401280 (system) ← DANGEROUS     │
+└─────────────────────────────────────────────────┘
+
+[✓] Taint analysis complete: 1 vulnerability found`,
+    details: [
+      "Reaching definitions analysis across basic blocks",
+      "Live variable computation for register/memory tracking",
+      "Use-def and def-use chain construction",
+      "Taint propagation from configurable sources to sinks",
+      "Built-in source set: read, recv, getenv, fgets, scanf",
+      "Built-in sink set: system, printf, memcpy, exec, strcpy",
+    ],
+  },
+  {
+    id: "pqc",
+    cmd: "zetton pqc",
+    title: "Post-Quantum Crypto Analysis",
+    icon: "⚛️",
+    desc: "Detect and assess NIST PQC algorithm implementations (FIPS 203/204/205 compliance)",
+    usage: `$ zetton pqc --compliance ./crypto_binary
+
+╔══════════════════════════════════════════╗
+║   ZETTON Post-Quantum Crypto Analysis   ║
+╚══════════════════════════════════════════╝
+
+[*] Scanning for PQC implementations...
+[*] Checking NIST FIPS 203/204/205 compliance...
+
+┌─ PQC Algorithm Detection ──────────────────────┐
+│                                                 │
+│  ML-KEM (Kyber)                                 │
+│  ├── Detected: ML-KEM-768 @ 0x081200           │
+│  ├── Constants: q=3329, n=256 ✓                │
+│  ├── NTT roots found ✓                         │
+│  └── FIPS 203 compliance: PARTIAL ⚠            │
+│       └── Missing: decapsulation validation     │
+│                                                 │
+│  ML-DSA (Dilithium)                             │
+│  ├── Detected: ML-DSA-65 @ 0x092400            │
+│  ├── Constants: q=8380417 ✓                    │
+│  ├── Rejection sampling found ✓                │
+│  └── FIPS 204 compliance: PASS ✓               │
+│                                                 │
+│  SLH-DSA (SPHINCS+)                             │
+│  └── Not detected                               │
+│                                                 │
+└─────────────────────────────────────────────────┘
+
+┌─ Quantum Threat Assessment ────────────────────┐
+│                                                 │
+│  Classical Crypto Found:                        │
+│  ├── RSA-2048   Risk: CRITICAL (Shor's)        │
+│  ├── ECDSA-256  Risk: CRITICAL (Shor's)        │
+│  └── AES-256    Risk: LOW (Grover's → 128-bit) │
+│                                                 │
+│  Migration Readiness: 67% (2/3 PQC algorithms) │
+│                                                 │
+│  Recommendation:                                │
+│  └── Replace RSA/ECDSA with ML-DSA or SLH-DSA  │
+│  └── Add SLH-DSA for hash-based signature needs │
+│  └── Fix ML-KEM decapsulation validation        │
+│                                                 │
+└─────────────────────────────────────────────────┘
+
+[✓] PQC analysis complete in 2.14s`,
+    details: [
+      "ML-KEM (Kyber) detection via NTT constants and polynomial operations",
+      "ML-DSA (Dilithium) identification through q-value and rejection sampling",
+      "SLH-DSA (SPHINCS+) recognition by hash-based signature patterns",
+      "NIST FIPS 203/204/205 compliance verification",
+      "Quantum threat level assessment for classical algorithms",
+      "Migration readiness scoring with actionable recommendations",
+    ],
+  },
+  {
+    id: "qaoa",
+    cmd: "zetton qaoa",
+    title: "QAOA Constraint Solver",
+    icon: "🧮",
+    desc: "Quantum Approximate Optimization for SAT solving and function boundary detection",
+    usage: `$ zetton qaoa --mode sat --constraints path_constraints.json
+
+╔══════════════════════════════════════════╗
+║       ZETTON QAOA Constraint Solver     ║
+╚══════════════════════════════════════════╝
+
+[*] Loading constraints: path_constraints.json
+[*] Converting to MAX-SAT instance...
+[⚛] Initializing QAOA circuit...
+
+┌─ QAOA Configuration ───────────────────────────┐
+│ Variables:    12                                 │
+│ Clauses:      34                                 │
+│ QAOA layers:  3 (p=3)                           │
+│ Optimizer:    COBYLA                             │
+│ Backend:      qasm_simulator                    │
+└─────────────────────────────────────────────────┘
+
+[⚛] Optimizing variational parameters...
+  Iteration  1: cost = -18.4
+  Iteration  5: cost = -26.7
+  Iteration 10: cost = -31.2
+  Iteration 15: cost = -33.1
+  Iteration 18: cost = -33.8 (converged)
+
+┌─ Solution ──────────────────────────────────────┐
+│                                                 │
+│  Satisfying assignment found:                   │
+│  x = [1,0,1,1,0,0,1,0,1,1,0,1]                │
+│                                                 │
+│  Clauses satisfied: 33/34 (97.1%)              │
+│  Approximation ratio: 0.971                     │
+│                                                 │
+│  Path constraint interpretation:                │
+│  ├── Branch @ 0x401120: TAKE (x[0]=1)          │
+│  ├── Branch @ 0x401156: SKIP (x[1]=0)          │
+│  ├── Branch @ 0x40118a: TAKE (x[2]=1)          │
+│  └── ... 9 more branches                       │
+│                                                 │
+│  Feasible execution path: ✓                     │
+│  Input to reach path: 0x41 0x0f 0xb7 0x23      │
+│                                                 │
+└─────────────────────────────────────────────────┘
+
+[✓] QAOA solving complete in 8.47s`,
+    details: [
+      "MAX-SAT encoding for symbolic execution path constraints",
+      "Graph partitioning for automated function boundary detection",
+      "Variational parameter optimization via COBYLA/SPSA",
+      "Configurable QAOA depth (p-layers) for quality/speed tradeoff",
+      "Approximation ratio reporting for solution quality",
+      "Integration with path constraint extraction from binary analysis",
+    ],
+  },
+  {
+    id: "report",
+    cmd: "zetton report",
+    title: "Report Generation",
+    icon: "📊",
+    desc: "Generate comprehensive HTML, JSON, or plaintext forensics reports with Zetton branding",
+    usage: `$ zetton report --format html --all ./analysis_output
+
+╔══════════════════════════════════════════╗
+║      ZETTON Report Generator            ║
+╚══════════════════════════════════════════╝
+
+[*] Collecting analysis results...
+[*] Modules included:
+    ├── Binary Analysis ✓
+    ├── Crypto Detection ✓
+    ├── Control Flow Graph ✓
+    ├── Data Flow Analysis ✓
+    ├── Forensics Timeline ✓
+    ├── PQC Assessment ✓
+    └── Quantum Engine Stats ✓
+
+[*] Generating HTML report...
+
+┌─ Report Summary ────────────────────────────────┐
+│                                                 │
+│  Target:          ./malware_sample              │
+│  Analysis Date:   2026-02-13 14:30:22 UTC       │
+│  Zetton Version:  0.1.0                         │
+│                                                 │
+│  Findings:                                      │
+│  ├── Critical:  2 (command injection, weak key) │
+│  ├── Warning:   4 (deprecated crypto, ECB, ...) │
+│  ├── Info:      12                              │
+│  └── Total:     18                              │
+│                                                 │
+│  Quantum Stats:                                 │
+│  ├── Circuits executed: 1,247                   │
+│  ├── Total shots: 12,470,000                    │
+│  └── Avg speedup: 8.7x                         │
+│                                                 │
+└─────────────────────────────────────────────────┘
+
+[*] Output: analysis_report.html (284 KB)
+[*] Output: analysis_report.json (47 KB)
+[✓] Report generation complete in 1.08s`,
+    details: [
+      "HTML reports with Zetton dark theme and interactive sections",
+      "JSON export for programmatic consumption and CI/CD integration",
+      "Plaintext output for terminal/log environments",
+      "Unified report combining all analysis module results",
+      "Severity classification: Critical, Warning, Info",
+      "Quantum engine statistics and speedup metrics",
+    ],
+  },
+];
+
+const QUANTUM_BACKENDS = [
+  { name: "Local Simulator", desc: "Qiskit Aer qasm_simulator", status: "available", qubits: 32 },
+  { name: "IBM Quantum", desc: "IBM Eagle/Heron processors", status: "configurable", qubits: 127 },
+  { name: "AWS Braket", desc: "Amazon managed quantum", status: "configurable", qubits: 79 },
+];
+
+function TerminalLine({ text, delay, onComplete }) {
+  const [displayed, setDisplayed] = useState("");
+  const [done, setDone] = useState(false);
+  
+  useEffect(() => {
+    if (!text) return;
+    let i = 0;
+    const interval = setInterval(() => {
+      if (i < text.length) {
+        setDisplayed(text.slice(0, i + 1));
+        i++;
+      } else {
+        clearInterval(interval);
+        setDone(true);
+        onComplete?.();
+      }
+    }, delay || 8);
+    return () => clearInterval(interval);
+  }, [text]);
+  
+  return <span>{displayed}{!done && <span style={{ animation: "blink 1s step-end infinite" }}>▌</span>}</span>;
+}
+
+function ZettonLogoSVG({ height = 40, color = "#FFD700" }) {
+  const aspect = 877 / 409;
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={height * aspect}
+      height={height}
+      viewBox="220 215 877 409"
+      preserveAspectRatio="xMidYMid meet"
+    >
+      <g
+        transform="translate(0,875) scale(0.1,-0.1)"
+        fill={color}
+        stroke="none"
+      >
+        <path d="M2308 6494 c154 -139 263 -378 317 -699 l22 -130 12 45 c36 143 70 173 194 172 112 -2 497 -80 497 -101 0 -4 -45 -103 -101 -221 -232 -493 -340 -743 -477 -1100 -140 -367 -251 -717 -331 -1050 -49 -200 -98 -460 -126 -664 -14 -104 -24 -191 -22 -192 1 -2 30 33 62 77 102 138 258 274 430 376 160 96 485 238 875 385 102 38 197 74 212 80 20 7 30 21 37 47 19 73 43 347 56 631 6 125 -1 143 -25 68 -6 -21 -33 -71 -60 -112 -76 -117 -196 -206 -384 -286 -112 -48 -375 -134 -383 -126 -6 5 44 156 124 376 66 184 189 495 295 750 103 249 174 414 304 700 l92 205 4 130 c3 110 7 137 26 173 12 23 20 42 19 42 -2 0 -95 26 -208 58 -112 33 -256 73 -319 91 -63 17 -209 58 -325 90 -115 32 -311 86 -435 121 -124 34 -271 75 -328 91 -56 16 -105 29 -109 29 -3 0 21 -25 55 -56z"/>
+        <path d="M10675 6460 c-137 -49 -319 -112 -404 -142 -124 -43 -158 -58 -175 -81 -21 -28 -21 -37 -21 -565 1 -295 4 -570 8 -609 13 -131 6 -117 -166 332 -89 232 -192 518 -234 648 -28 87 -38 107 -52 103 -9 -3 -88 -24 -176 -46 -182 -47 -406 -110 -418 -117 -5 -3 10 -14 32 -25 79 -39 108 -135 98 -326 -4 -65 -14 -252 -23 -417 -16 -297 -15 -787 2 -1249 8 -200 -7 -278 -58 -321 -16 -14 -34 -25 -39 -25 -5 0 -9 -4 -9 -9 0 -6 114 -46 253 -91 138 -45 278 -90 310 -100 64 -21 65 -21 42 55 -28 89 -54 267 -65 430 -11 176 -21 1006 -13 1069 l6 40 39 -95 c127 -304 181 -441 264 -669 25 -69 51 -141 58 -160 43 -113 147 -467 196 -665 63 -258 45 -225 176 -305 174 -106 351 -265 470 -423 62 -81 74 -93 74 -72 0 45 -48 241 -192 780 -58 218 -110 517 -133 763 -43 464 -40 1431 5 1733 17 109 59 276 84 333 24 54 156 189 262 267 30 22 54 42 54 44 0 3 -1 5 -2 4 -2 -1 -115 -41 -253 -89z"/>
+        <path d="M4073 6010 c71 -60 87 -117 109 -375 16 -201 16 -1182 0 -1415 -22 -314 -45 -467 -84 -557 -18 -41 -60 -106 -77 -120 -31 -26 0 -21 135 21 256 81 489 142 754 196 85 18 160 33 166 35 29 8 64 205 64 356 l0 63 -34 -40 c-52 -61 -114 -89 -266 -118 -74 -14 -155 -29 -179 -32 l-44 -7 7 94 c3 52 9 195 12 319 3 124 7 235 10 248 4 22 6 22 177 22 176 -1 228 -9 266 -44 17 -16 19 -15 25 15 9 45 8 389 -2 389 -4 0 -12 -8 -19 -19 -6 -10 -32 -23 -57 -30 -49 -12 -237 -15 -334 -5 l-60 7 -4 286 c-2 157 -1 289 2 293 7 10 347 -46 390 -64 19 -9 48 -27 63 -42 15 -14 30 -26 33 -26 6 0 3 143 -5 259 l-6 95 -60 12 c-33 7 -132 27 -220 44 -187 36 -418 87 -595 130 -69 17 -143 34 -165 37 l-40 5 38 -32z"/>
+        <path d="M8635 5909 c-55 -10 -221 -39 -370 -64 -300 -51 -347 -66 -377 -125 -50 -100 -63 -312 -63 -1035 0 -577 2 -624 19 -683 22 -73 76 -140 133 -165 21 -9 115 -30 208 -47 94 -17 251 -49 350 -71 279 -62 360 -52 413 51 25 50 29 138 12 275 -44 357 -39 1108 11 1505 30 247 6 324 -114 364 -58 20 -94 19 -222 -5z m-110 -364 c0 -44 -6 -199 -14 -345 -10 -184 -12 -401 -9 -708 5 -393 4 -445 -10 -459 -31 -30 -209 5 -229 45 -13 27 -16 845 -4 1112 15 329 20 377 40 400 19 25 85 39 166 37 l60 -2 0 -80z"/>
+        <path d="M5226 5791 c-3 -4 0 -96 6 -203 l12 -195 33 33 c45 45 89 56 218 52 l110 -3 6 -95 c11 -152 10 -595 -1 -855 -12 -275 -25 -415 -46 -499 -16 -60 -60 -136 -92 -156 -13 -8 0 -10 53 -7 129 7 600 50 605 54 3 3 -7 15 -21 26 -15 12 -35 38 -45 57 -18 33 -19 70 -19 732 0 383 2 698 5 700 3 2 52 1 110 -2 117 -7 172 -26 233 -80 l37 -32 0 189 0 190 -247 13 c-137 6 -354 23 -483 36 -129 14 -278 29 -330 34 -52 6 -105 12 -117 15 -12 3 -24 1 -27 -4z"/>
+        <path d="M7615 5744 c-130 -13 -727 -43 -945 -47 l-135 -2 -2 -187 c-1 -104 1 -188 3 -188 3 0 24 16 47 35 51 44 113 63 233 71 l92 7 7 -44 c3 -24 2 -336 -2 -694 -10 -712 -7 -680 -70 -739 -15 -14 -24 -29 -19 -33 4 -4 44 -9 89 -11 45 -2 188 -9 317 -17 129 -7 236 -12 238 -10 2 1 -11 18 -28 36 -41 45 -67 118 -82 231 -18 127 -19 1271 -1 1289 6 6 51 14 100 16 108 7 183 -12 231 -57 22 -21 33 -27 36 -18 2 7 9 88 15 179 5 92 12 172 13 179 4 18 -5 18 -137 4z"/>
+      </g>
+    </svg>
+  );
+}
+
+function GlitchLogo({ height = 40, style }) {
+  const [glitch, setGlitch] = useState(false);
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setGlitch(true);
+      setTimeout(() => setGlitch(false), 120);
+    }, 3000 + Math.random() * 4000);
+    return () => clearInterval(interval);
+  }, []);
+  
+  return (
+    <span style={{
+      ...style,
+      position: "relative",
+      display: "inline-block",
+      filter: "drop-shadow(0 0 8px rgba(255,215,0,0.25))",
+    }}>
+      {glitch && (
+        <>
+          <span style={{
+            position: "absolute", left: -3, top: -1,
+            opacity: 0.6,
+            filter: "hue-rotate(20deg) brightness(1.4)",
+            clipPath: "inset(15% 0 45% 0)",
+          }}>
+            <ZettonLogoSVG height={height} color="#FFD700" />
+          </span>
+          <span style={{
+            position: "absolute", left: 3, top: 1,
+            opacity: 0.4,
+            filter: "brightness(2)",
+            clipPath: "inset(50% 0 10% 0)",
+          }}>
+            <ZettonLogoSVG height={height} color="#ffffff" />
+          </span>
+        </>
+      )}
+      <ZettonLogoSVG height={height} color="#FFD700" />
+    </span>
+  );
+}
+
+function ModuleCard({ module, isActive, onClick }) {
+  const [hovered, setHovered] = useState(false);
+  
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{
+        background: isActive
+          ? "linear-gradient(135deg, #1a1a1a 0%, #2a2a0a 100%)"
+          : hovered
+            ? "linear-gradient(135deg, #1a1a1a 0%, #222 100%)"
+            : "#111",
+        border: isActive ? "1px solid #FFD700" : "1px solid #333",
+        borderLeft: isActive ? "3px solid #FFD700" : "3px solid transparent",
+        padding: "14px 16px",
+        cursor: "pointer",
+        transition: "all 0.2s ease",
+        transform: hovered && !isActive ? "translateX(4px)" : "none",
+        borderRadius: 2,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <span style={{ fontSize: 18 }}>{module.icon}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            color: isActive ? "#FFD700" : "#ccc",
+            fontSize: 13,
+            fontWeight: 600,
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+            letterSpacing: "0.02em",
+          }}>
+            {module.title}
+          </div>
+          <div style={{
+            color: "#666",
+            fontSize: 10,
+            fontFamily: "'JetBrains Mono', monospace",
+            marginTop: 2,
+          }}>
+            {module.cmd}
+          </div>
+        </div>
+        <span style={{
+          color: isActive ? "#FFD700" : "#444",
+          fontSize: 14,
+          transition: "transform 0.2s",
+          transform: isActive ? "rotate(90deg)" : "none",
+        }}>▸</span>
+      </div>
+    </div>
+  );
+}
+
+function Terminal({ content }) {
+  const ref = useRef(null);
+  const [visible, setVisible] = useState(false);
+  
+  useEffect(() => {
+    setVisible(false);
+    const t = setTimeout(() => setVisible(true), 50);
+    return () => clearTimeout(t);
+  }, [content]);
+  
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = 0;
+  }, [content]);
+  
+  if (!visible) return null;
+  
+  return (
+    <div
+      ref={ref}
+      style={{
+        background: "#0a0a0a",
+        border: "1px solid #333",
+        borderRadius: 4,
+        fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+        fontSize: 11.5,
+        lineHeight: 1.6,
+        overflow: "auto",
+        maxHeight: 480,
+        position: "relative",
+      }}
+    >
+      <div style={{
+        position: "sticky",
+        top: 0,
+        background: "linear-gradient(180deg, #1a1a1a 0%, #151515 100%)",
+        borderBottom: "1px solid #333",
+        padding: "8px 14px",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        zIndex: 2,
+      }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#ff5f57" }} />
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#febc2e" }} />
+          <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#28c840" }} />
+        </div>
+        <span style={{ color: "#666", fontSize: 11, marginLeft: 8 }}>zetton — kali@cyberjedis</span>
+      </div>
+      <pre style={{
+        margin: 0,
+        padding: "16px 18px",
+        color: "#c8c8c8",
+        whiteSpace: "pre",
+        overflowX: "auto",
+      }}>
+        {content.split('\n').map((line, i) => {
+          let color = "#c8c8c8";
+          if (line.includes("[✓]") || line.includes("✓") || line.includes("PASS")) color = "#28c840";
+          else if (line.includes("[!]") || line.includes("⚠") || line.includes("WARNING") || line.includes("PARTIAL")) color = "#febc2e";
+          else if (line.includes("[!!!]") || line.includes("CRITICAL") || line.includes("DANGEROUS") || line.includes("VULNERABILITY")) color = "#ff5f57";
+          else if (line.includes("[⚛]") || line.includes("quantum") || line.includes("Quantum")) color = "#a78bfa";
+          else if (line.includes("[*]")) color = "#60a5fa";
+          else if (line.startsWith("$")) color = "#FFD700";
+          else if (line.includes("╔") || line.includes("╚") || line.includes("║")) color = "#FFD700";
+          
+          return <div key={i} style={{ color, minHeight: "1.6em" }}>{line}</div>;
+        })}
+      </pre>
+    </div>
+  );
+}
+
+function QuantumBackendPanel() {
+  return (
+    <div style={{
+      background: "#0d0d0d",
+      border: "1px solid #222",
+      borderRadius: 4,
+      padding: 16,
+      marginTop: 16,
+    }}>
+      <div style={{
+        color: "#a78bfa",
+        fontSize: 12,
+        fontWeight: 700,
+        fontFamily: "'JetBrains Mono', monospace",
+        marginBottom: 12,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+      }}>
+        ⚛ Quantum Backends
+      </div>
+      {QUANTUM_BACKENDS.map((b, i) => (
+        <div key={i} style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "8px 0",
+          borderBottom: i < QUANTUM_BACKENDS.length - 1 ? "1px solid #1a1a1a" : "none",
+        }}>
+          <div style={{
+            width: 8, height: 8, borderRadius: "50%",
+            background: b.status === "available" ? "#28c840" : "#febc2e",
+            boxShadow: b.status === "available" ? "0 0 6px #28c840" : "none",
+          }} />
+          <div style={{ flex: 1 }}>
+            <div style={{ color: "#ccc", fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>
+              {b.name}
+            </div>
+            <div style={{ color: "#555", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>
+              {b.desc} • {b.qubits} qubits
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ZettonDemo() {
+  const [activeModule, setActiveModule] = useState(MODULES[0]);
+  const [showDetails, setShowDetails] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  
+  useEffect(() => {
+    setTimeout(() => setLoaded(true), 100);
+  }, []);
+  
+  return (
+    <div style={{
+      background: "#000",
+      minHeight: "100vh",
+      color: "#e0e0e0",
+      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+      position: "relative",
+      overflow: "hidden",
+    }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+        @keyframes scanline {
+          0% { transform: translateY(-100%); }
+          100% { transform: translateY(100vh); }
+        }
+        @keyframes fadeSlideIn {
+          from { opacity: 0; transform: translateY(12px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes pulse {
+          0%, 100% { opacity: 0.4; }
+          50% { opacity: 0.8; }
+        }
+        * { box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0a0a0a; }
+        ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+      `}</style>
+
+      {/* Scanline overlay */}
+      <div style={{
+        position: "fixed", inset: 0, pointerEvents: "none", zIndex: 100,
+        background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)",
+      }} />
+
+      {/* Header */}
+      <div style={{
+        borderBottom: "1px solid #222",
+        padding: "10px 28px 12px",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        background: "linear-gradient(180deg, #0a0a0a 0%, #000 100%)",
+        opacity: loaded ? 1 : 0,
+        transform: loaded ? "none" : "translateY(-20px)",
+        transition: "all 0.6s ease",
+      }}>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, width: "100%" }}>
+          <GlitchLogo height={85} />
+          <div style={{
+            fontSize: 10,
+            color: "#666",
+            letterSpacing: "0.25em",
+            textTransform: "uppercase",
+            marginTop: -2,
+          }}>
+            Quantum Software Reverse Engineering Framework
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 4 }}>
+            <span style={{
+              fontSize: 10,
+              color: "#555",
+              padding: "3px 10px",
+              border: "1px solid #333",
+              borderRadius: 2,
+            }}>
+              v0.1.0-alpha
+            </span>
+            <span style={{
+              fontSize: 10,
+              color: "#28c840",
+              padding: "3px 10px",
+              background: "rgba(40,200,64,0.08)",
+              border: "1px solid rgba(40,200,64,0.2)",
+              borderRadius: 2,
+              animation: "pulse 3s ease infinite",
+            }}>
+              ● UTSA Cyber Jedis
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div style={{
+        display: "flex",
+        height: "calc(100vh - 80px)",
+        opacity: loaded ? 1 : 0,
+        transition: "opacity 0.8s ease 0.2s",
+      }}>
+        {/* Sidebar */}
+        <div style={{
+          width: 280,
+          minWidth: 280,
+          borderRight: "1px solid #222",
+          overflowY: "auto",
+          padding: "12px 10px",
+          background: "#080808",
+        }}>
+          <div style={{
+            color: "#555",
+            fontSize: 9,
+            letterSpacing: "0.2em",
+            textTransform: "uppercase",
+            padding: "8px 8px 12px",
+            fontWeight: 600,
+          }}>
+            Analysis Modules
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {MODULES.map((m) => (
+              <ModuleCard
+                key={m.id}
+                module={m}
+                isActive={activeModule.id === m.id}
+                onClick={() => {
+                  setActiveModule(m);
+                  setShowDetails(false);
+                }}
+              />
+            ))}
+          </div>
+          <QuantumBackendPanel />
+        </div>
+
+        {/* Main panel */}
+        <div style={{
+          flex: 1,
+          overflow: "auto",
+          padding: "24px 32px",
+        }}>
+          <div style={{
+            animation: "fadeSlideIn 0.3s ease",
+            key: activeModule.id,
+          }}>
+            {/* Module header */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+                <span style={{ fontSize: 28 }}>{activeModule.icon}</span>
+                <div>
+                  <h2 style={{
+                    margin: 0,
+                    fontSize: 20,
+                    fontWeight: 700,
+                    color: "#FFD700",
+                    letterSpacing: "0.04em",
+                  }}>
+                    {activeModule.title}
+                  </h2>
+                  <code style={{
+                    fontSize: 12,
+                    color: "#666",
+                    background: "#111",
+                    padding: "2px 8px",
+                    borderRadius: 2,
+                  }}>
+                    $ {activeModule.cmd}
+                  </code>
+                </div>
+              </div>
+              <p style={{
+                color: "#888",
+                fontSize: 13,
+                lineHeight: 1.5,
+                margin: "12px 0 0",
+                maxWidth: 700,
+              }}>
+                {activeModule.desc}
+              </p>
+            </div>
+
+            {/* Terminal output */}
+            <Terminal content={activeModule.usage} />
+
+            {/* Details toggle */}
+            <div
+              onClick={() => setShowDetails(!showDetails)}
+              style={{
+                marginTop: 16,
+                padding: "12px 16px",
+                background: "#0d0d0d",
+                border: "1px solid #222",
+                borderRadius: 4,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                transition: "border-color 0.2s",
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.borderColor = "#444"}
+              onMouseLeave={(e) => e.currentTarget.style.borderColor = "#222"}
+            >
+              <span style={{ color: "#888", fontSize: 12, fontWeight: 600 }}>
+                Technical Capabilities
+              </span>
+              <span style={{
+                color: "#FFD700",
+                fontSize: 12,
+                transition: "transform 0.2s",
+                transform: showDetails ? "rotate(90deg)" : "none",
+              }}>▸</span>
+            </div>
+
+            {showDetails && (
+              <div style={{
+                padding: "16px 20px",
+                background: "#080808",
+                border: "1px solid #222",
+                borderTop: "none",
+                borderRadius: "0 0 4px 4px",
+                animation: "fadeSlideIn 0.2s ease",
+              }}>
+                {activeModule.details.map((d, i) => (
+                  <div key={i} style={{
+                    display: "flex",
+                    gap: 10,
+                    padding: "6px 0",
+                    borderBottom: i < activeModule.details.length - 1 ? "1px solid #141414" : "none",
+                  }}>
+                    <span style={{ color: "#FFD700", fontSize: 8, marginTop: 5 }}>◆</span>
+                    <span style={{ color: "#999", fontSize: 12, lineHeight: 1.5 }}>{d}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Quick reference */}
+            <div style={{
+              marginTop: 24,
+              padding: "16px 20px",
+              background: "linear-gradient(135deg, #0d0d0d 0%, #0a0a0a 100%)",
+              border: "1px solid #1a1a1a",
+              borderRadius: 4,
+            }}>
+              <div style={{
+                color: "#555",
+                fontSize: 9,
+                letterSpacing: "0.2em",
+                textTransform: "uppercase",
+                marginBottom: 10,
+                fontWeight: 600,
+              }}>
+                Integration Examples
+              </div>
+              <pre style={{
+                margin: 0,
+                fontSize: 11,
+                color: "#888",
+                lineHeight: 1.7,
+              }}>
+                <span style={{ color: "#555" }}># Python API</span>{"\n"}
+                <span style={{ color: "#a78bfa" }}>from</span>{" "}
+                <span style={{ color: "#FFD700" }}>zetton</span>{" "}
+                <span style={{ color: "#a78bfa" }}>import</span>{" "}
+                <span style={{ color: "#ccc" }}>Zetton</span>{"\n"}
+                <span style={{ color: "#ccc" }}>z</span>{" "}
+                <span style={{ color: "#888" }}>=</span>{" "}
+                <span style={{ color: "#ccc" }}>Zetton</span>
+                <span style={{ color: "#888" }}>(</span>
+                <span style={{ color: "#28c840" }}>"target_binary"</span>
+                <span style={{ color: "#888" }}>)</span>{"\n"}
+                <span style={{ color: "#ccc" }}>z</span>
+                <span style={{ color: "#888" }}>.</span>
+                <span style={{ color: "#60a5fa" }}>{activeModule.id === "analyze" ? "analyze" : activeModule.id === "crypto" ? "crypto.detect" : activeModule.id === "forensics" ? "forensics.analyze" : activeModule.id === "cfg" ? "cfg.build" : activeModule.id === "dataflow" ? "dataflow.taint" : activeModule.id === "pqc" ? "pqc.assess" : activeModule.id === "qaoa" ? "qaoa.solve" : "report.generate"}</span>
+                <span style={{ color: "#888" }}>()</span>
+              </pre>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Footer bar */}
+      <div style={{
+        position: "fixed",
+        bottom: 0,
+        left: 0,
+        right: 0,
+        background: "#080808",
+        borderTop: "1px solid #1a1a1a",
+        padding: "6px 20px",
+        display: "flex",
+        justifyContent: "space-between",
+        fontSize: 10,
+        color: "#444",
+        zIndex: 50,
+      }}>
+        <span>MIT License • github.com/keebanvillarreal/zetton</span>
+        <span>Qiskit + LIEF + Capstone • Python 3.10+</span>
+      </div>
+    </div>
+  );
+}
+
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(ZettonDemo));
+    </script>
+</body>
+</html>
