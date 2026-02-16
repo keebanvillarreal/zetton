@@ -237,8 +237,8 @@ class Binary:
             # Architecture detection
             machine = elf.header.machine_type
             arch_map = {
-                lief.ELF.ARCH.i386: (Architecture.X86, 32),
-                lief.ELF.ARCH.x86_64: (Architecture.X86_64, 64),
+                lief.ELF.ARCH.I386: (Architecture.X86, 32),
+                lief.ELF.ARCH.X86_64: (Architecture.X86_64, 64),
                 lief.ELF.ARCH.ARM: (Architecture.ARM, 32),
                 lief.ELF.ARCH.AARCH64: (Architecture.ARM64, 64),
                 lief.ELF.ARCH.MIPS: (Architecture.MIPS, 32),
@@ -249,7 +249,7 @@ class Binary:
             )
             
             # Endianness
-            self.endianness = "little" if elf.header.identity_data == lief.ELF.ELF_DATA.LSB else "big"
+            self.endianness = "little" if elf.header.identity_data == lief.ELF.Header.ELF_DATA.LSB else "big"
             
             # Entry point
             self.entry_point = elf.entrypoint

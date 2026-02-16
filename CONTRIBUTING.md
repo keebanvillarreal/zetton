@@ -2,7 +2,7 @@
 
 ## About the Team
 
-**Zetton** was created by the **UTSA Cyber Jedis Quantum Cybersecurity Team**, a group of cybersecurity researchers exploring the intersection of quantum computing and digital forensics.
+**Zetton** was created by the **UTSA Cyber Jedis Quantum Cybersecurity Research Interest Group**, a group of cybersecurity researchers exploring the intersection of quantum computing and digital forensics.
 
 We're passionate about pushing the boundaries of security research and making quantum-assisted analysis accessible to the broader security community.
 

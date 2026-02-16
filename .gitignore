@@ -1,0 +1,27 @@
+# Virtual environment
+zetton-env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+zetton.egg-info/
+dist/
+build/
+*.egg
+
+# Compiled sample binaries (users compile locally)
+examples/samples/sample_aes_ecb
+examples/samples/sample_network_vuln
+examples/samples/sample_pqc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

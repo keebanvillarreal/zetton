@@ -1,0 +1,18 @@
+{
+  "variables": 8,
+  "clauses": [
+    {"vars": [1, 2], "negated": [false, true]},
+    {"vars": [2, 3], "negated": [true, false]},
+    {"vars": [1, 3, 4], "negated": [false, false, true]},
+    {"vars": [4, 5], "negated": [false, false]},
+    {"vars": [5, 6], "negated": [true, true]},
+    {"vars": [3, 7], "negated": [false, true]},
+    {"vars": [6, 7, 8], "negated": [true, false, false]},
+    {"vars": [1, 8], "negated": [false, true]},
+    {"vars": [2, 4, 6], "negated": [true, false, true]},
+    {"vars": [3, 5, 8], "negated": [false, true, false]},
+    {"vars": [1, 6], "negated": [true, false]},
+    {"vars": [7, 8], "negated": [false, false]}
+  ],
+  "description": "Path constraints extracted from symbolic execution of classify_packet in sample_network_vuln"
+}
