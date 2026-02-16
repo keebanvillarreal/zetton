@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZETTON — Quantum Software Reverse Engineering Framework</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #000; overflow: hidden; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+    
+    <script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+function ZettonDemo() {
+  const [activeModule, setActiveModule] = useState(null);
+  const [bootSequence, setBootSequence] = useState(true);
+  const [bootLines, setBootLines] = useState([]);
+  const [glitchActive, setGlitchActive] = useState(false);
+  const canvasRef = useRef(null);
+
+  const modules = [
+    {
+      id: "analyze",
+      name: "BINARY ANALYSIS",
+      icon: "\u2B21",
+      status: "READY",
+      color: "#FFD700",
+      desc: "ELF/PE/Mach-O format detection, section entropy analysis, security feature detection (PIE, NX, RELRO, Canary, FORTIFY), and file hashing.",
+      demo: {
+        title: "$ zetton analyze ./sample_aes_ecb",
+        output: [
+          "Format:       ELF 64-bit x86_64 (little-endian)",
+          "Size:         19,648 bytes",
+          "Entry Point:  0x10E0",
+          "Sections:     37  |  Symbols: 66  |  Imports: 24",
+          "",
+          "Section          Size    Entropy  Risk",
+          "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+          ".text            1,015   5.78     \u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591\u2591\u2591",
+          ".rodata            753   7.52     \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2591\u2591",
+          ".data               32   2.14     \u2588\u2588\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591",
+          "",
+          "Security Features:",
+          "  PIE: \u2713  NX: \u2713  RELRO: Partial  Canary: \u2717  FORTIFY: \u2717",
+          "",
+          "MD5:    a1b2c3d4e5f6789012345678abcdef01",
+          "SHA256: 4f8e2c1a9b3d7e6f0a2b4c6d8e0f1a2b..."
+        ]
+      }
+    },
+    {
+      id: "crypto",
+      name: "CRYPTO DETECTION",
+      icon: "\u25C8",
+      status: "READY",
+      color: "#00FFAA",
+      desc: "Pattern matching for 15+ cryptographic algorithms including AES, SHA-256, RSA, DES, Blowfish, ChaCha20, and post-quantum signatures.",
+      demo: {
+        title: "$ zetton crypto --quantum ./sample_aes_ecb",
+        output: [
+          "Scanning 19,648 bytes for cryptographic patterns...",
+          "",
+          "Algorithm    Pattern              Offset    Section   Size",
+          "\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+          "AES          sbox                 0x2020    .rodata   16 B",
+          "SHA-256      initial_hash_le      0x2120    .rodata   16 B",
+          "SHA-256      round_constants_le   0x2140    .rodata   16 B",
+          "",
+          "Found 3 cryptographic patterns (2 algorithms)",
+          "",
+          "\u250C\u2500 Quantum Speedup Analysis (Grover's) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+          "\u2502 AES-128:    Classical: 2^128  \u2192  Quantum: 2^64   \u2502",
+          "\u2502 SHA-256:    Classical: 2^256  \u2192  Quantum: 2^128  \u2502",
+          "\u2502 Effective post-quantum security: SUFFICIENT       \u2502",
+          "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518"
+        ]
+      }
+    },
+    {
+      id: "forensics",
+      name: "FORENSICS",
+      icon: "\u25C9",
+      status: "READY",
+      color: "#FF6B6B",
+      desc: "Weakness detection, timestamp extraction, hardcoded key identification, ECB mode flagging, weak PRNG detection, and quantum threat assessment.",
+      demo: {
+        title: "$ zetton forensics ./sample_aes_ecb",
+        output: [
+          "Timeline: 304 timestamp candidates (2023-05-29)",
+          "",
+          "Cryptographic Weaknesses (11 issues):",
+          "",
+          "  CRITICAL  Null AES-128 key at 0xB5",
+          "  CRITICAL  Null AES-256 key at 0x31D",
+          "  CRITICAL  NIST test vector at 0x2240 (hardcoded key)",
+          "  WARNING   ECB mode references at 0x37C1, 0x37C0",
+          "  WARNING   ECB functions: weak_ecb_encrypt",
+          "  WARNING   Weak PRNG: srand, rand",
+          "  INFO      Dangerous: strcpy, system, sprintf",
+          "",
+          "Quantum Threat Assessment:",
+          "  AES     \u2192 LOW  (Grover's halves key strength)",
+          "  SHA-256 \u2192 LOW  (Grover's halves hash strength)"
+        ]
+      }
+    },
+    {
+      id: "cfg",
+      name: "CFG ANALYSIS",
+      icon: "\u25C7",
+      status: "READY",
+      color: "#9B59B6",
+      desc: "Capstone-powered disassembly with basic block construction, edge detection, loop identification, and cyclomatic complexity calculation.",
+      demo: {
+        title: "$ zetton cfg --function classify_packet ./sample_network_vuln",
+        output: [
+          "Function: classify_packet @ 0x1335 (422 bytes)",
+          "",
+          "  Instructions          132",
+          "  Basic blocks            39",
+          "  Edges                   56",
+          "  Cyclomatic complexity   19",
+          "  Loops detected           2",
+          "  Branch instructions     34",
+          "  Return instructions      1",
+          "",
+          "Basic Blocks:",
+          "  BB0   0x00001335    5 insns  \u2192 0x1357, 0x13B7",
+          "  BB1   0x00001357    3 insns  \u2192 0x1370",
+          "  BB2   0x00001370    4 insns  \u2192 0x1392, 0x13A0",
+          "  ...   (36 more blocks)",
+          "",
+          "Loops:",
+          "  Loop 0: header 0x13B7, back-edge from 0x141A",
+          "  Loop 1: header 0x1482, back-edge from 0x14A4"
+        ]
+      }
+    },
+    {
+      id: "dataflow",
+      name: "TAINT ANALYSIS",
+      icon: "\u2B22",
+      status: "READY",
+      color: "#E67E22",
+      desc: "Source-to-sink data flow tracking. Identifies taint sources (network, file, env) and dangerous sinks (exec, format string, buffer overflow).",
+      demo: {
+        title: "$ zetton dataflow --taint ./sample_network_vuln",
+        output: [
+          "Taint Sources (imported):",
+          "  fread       File read",
+          "  getenv      Environment variable",
+          "",
+          "Taint Sinks (imported):",
+          "  Function    Risk                          Severity",
+          "  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+          "  memcpy      Memory copy                   MEDIUM",
+          "  printf      Format string                 HIGH",
+          "  sprintf     Format string / overflow      CRITICAL",
+          "  system      Command execution             CRITICAL",
+          "",
+          "Potential Taint Flows:",
+          "  #1  getenv \u2192 sprintf  in process_env()    CRITICAL",
+          "  #2  fread  \u2192 memcpy   in parse_packet()   MEDIUM",
+          "",
+          "Vulnerability Summary:",
+          "  CRITICAL: 1 flow(s) \u2014 tainted data reaches exec sinks",
+          "  MEDIUM:   1 flow(s)"
+        ]
+      }
+    },
+    {
+      id: "pqc",
+      name: "PQC ANALYSIS",
+      icon: "\u2B20",
+      status: "READY",
+      color: "#3498DB",
+      desc: "Post-quantum cryptography assessment with NIST FIPS 203/204/205 compliance checking, migration readiness scoring, and replacement recommendations.",
+      demo: {
+        title: "$ zetton pqc --compliance ./sample_pqc",
+        output: [
+          "\u26A0  Quantum-Vulnerable Cryptography Detected:",
+          "  DES/3DES    HIGH      Grover's: 56-bit \u2192 trivial",
+          "  RSA         CRITICAL  Shor's: polynomial time",
+          "  ECDSA/ECDH  CRITICAL  Shor's: polynomial time",
+          "",
+          "\u2713 Post-Quantum Cryptography Detected:",
+          "  ML-KEM (Kyber)       FIPS 203  Key Encapsulation  SECURE",
+          "  ML-DSA (Dilithium)   FIPS 204  Digital Signature  SECURE",
+          "  SLH-DSA (SPHINCS+)   FIPS 205  Hash-based Sig     SECURE",
+          "",
+          "Migration Score: 75/100 (Grade: A)",
+          "  PQC Algorithms Implemented: 3/3",
+          "  Vulnerable Algorithms Remaining: 3",
+          "",
+          "NIST FIPS Compliance:",
+          "  FIPS 203  ML-KEM (Kyber)       DETECTED",
+          "  FIPS 204  ML-DSA (Dilithium)   DETECTED",
+          "  FIPS 205  SLH-DSA (SPHINCS+)   DETECTED"
+        ]
+      }
+    },
+    {
+      id: "quantum",
+      name: "QUANTUM ENGINE",
+      icon: "\u27D0",
+      status: "IN DEV",
+      color: "#FF00FF",
+      desc: "Qiskit-based quantum circuit construction with local Aer simulation. Hardware backends for IBM Quantum and AWS Braket. Grover's search integration.",
+      demo: {
+        title: "$ zetton quantum list-backends",
+        output: [
+          "Available Quantum Backends:",
+          "",
+          "  Backend                Provider        Status",
+          "  \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+          "  qasm_simulator         Qiskit Aer      \u2713 Available",
+          "  statevector_simulator  Qiskit Aer      \u2713 Available",
+          "  ibmq_*                 IBM Quantum     \u26A0 Requires token",
+          "  braket_*               AWS Braket      \u26A0 Requires credentials",
+          "",
+          "  Active backend: qasm_simulator (local)",
+          "  Qubits available: 32 (simulated)",
+          "",
+          "  Grover's search:  \uD83D\uDEA7 Implementation in progress",
+          "  QAOA solver:      \uD83D\uDEA7 Implementation in progress",
+          "  VQE optimizer:    \uD83D\uDCCB Planned"
+        ]
+      }
+    },
+    {
+      id: "report",
+      name: "REPORT GEN",
+      icon: "\u25F0",
+      status: "PLANNED",
+      color: "#95A5A6",
+      desc: "Unified HTML/JSON/text report generation combining all analysis results into a comprehensive security assessment document.",
+      demo: {
+        title: "$ zetton report --format html --all ./binary",
+        output: [
+          "\u250C\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510",
+          "\u2502         COMING SOON                   \u2502",
+          "\u2502                                       \u2502",
+          "\u2502  Unified report generation will       \u2502",
+          "\u2502  combine output from all analysis     \u2502",
+          "\u2502  commands into a single document:     \u2502",
+          "\u2502                                       \u2502",
+          "\u2502  \u2022 Binary profile & security audit    \u2502",
+          "\u2502  \u2022 Crypto inventory & weaknesses      \u2502",
+          "\u2502  \u2022 CFG complexity metrics             \u2502",
+          "\u2502  \u2022 Taint flow vulnerability map       \u2502",
+          "\u2502  \u2022 PQC migration roadmap              \u2502",
+          "\u2502  \u2022 Quantum threat summary             \u2502",
+          "\u2502                                       \u2502",
+          "\u2502  Formats: HTML, JSON, Markdown        \u2502",
+          "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518"
+        ]
+      }
+    }
+  ];
+
+  // Boot sequence
+  useEffect(() => {
+    const lines = [
+      { text: "ZETTON QUANTUM FRAMEWORK v0.1.0", delay: 0 },
+      { text: "Initializing quantum subsystem...", delay: 300 },
+      { text: "Loading Qiskit backend: qasm_simulator", delay: 600 },
+      { text: "Capstone disassembly engine: READY", delay: 900 },
+      { text: "LIEF binary parser: READY", delay: 1100 },
+      { text: "Crypto constants database: 15+ algorithms loaded", delay: 1300 },
+      { text: "Forensics modules: ONLINE", delay: 1500 },
+      { text: "PQC analyzer (FIPS 203/204/205): ONLINE", delay: 1700 },
+      { text: "CFG builder + taint tracker: ONLINE", delay: 1900 },
+      { text: "UTSA Cyber Jedis Quantum Cybersecurity RIG", delay: 2100 },
+      { text: "", delay: 2300 },
+      { text: "SYSTEM OPERATIONAL \u2014 6 analysis commands ready", delay: 2400 },
+    ];
+
+    lines.forEach(({ text, delay }) => {
+      setTimeout(() => {
+        setBootLines(prev => [...prev, text]);
+      }, delay);
+    });
+
+    setTimeout(() => setBootSequence(false), 3200);
+  }, []);
+
+  // Matrix rain background
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+
+    const resize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+    resize();
+    window.addEventListener("resize", resize);
+
+    const chars = "01\u30A2\u30A4\u30A6\u30A8\u30AA\u30AB\u30AD\u30AF\u30B1\u30B3ZETTON\u91CF\u5B50\u6697\u53F7\u89E3\u6790";
+    const fontSize = 14;
+    const columns = Math.floor(canvas.width / fontSize);
+    const drops = Array(columns).fill(1);
+
+    const draw = () => {
+      ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.font = fontSize + "px monospace";
+
+      for (let i = 0; i < drops.length; i++) {
+        const char = chars[Math.floor(Math.random() * chars.length)];
+        const x = i * fontSize;
+        const y = drops[i] * fontSize;
+
+        if (Math.random() > 0.7) {
+          ctx.fillStyle = "rgba(255, 215, 0, " + (Math.random() * 0.4 + 0.1) + ")";
+        } else {
+          ctx.fillStyle = "rgba(0, 255, 70, " + (Math.random() * 0.3 + 0.05) + ")";
+        }
+
+        ctx.fillText(char, x, y);
+
+        if (y > canvas.height && Math.random() > 0.975) {
+          drops[i] = 0;
+        }
+        drops[i]++;
+      }
+    };
+
+    const interval = setInterval(draw, 45);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("resize", resize);
+    };
+  }, []);
+
+  // Glitch effect
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (Math.random() > 0.92) {
+        setGlitchActive(true);
+        setTimeout(() => setGlitchActive(false), 150);
+      }
+    }, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Terminal typing effect
+  const [typedLines, setTypedLines] = useState([]);
+  const [isTyping, setIsTyping] = useState(false);
+
+  useEffect(() => {
+    if (!activeModule) {
+      setTypedLines([]);
+      return;
+    }
+
+    const mod = modules.find(m => m.id === activeModule);
+    if (!mod) return;
+
+    setTypedLines([]);
+    setIsTyping(true);
+
+    const allLines = [mod.demo.title, "", ...mod.demo.output];
+    allLines.forEach((line, i) => {
+      setTimeout(() => {
+        setTypedLines(prev => [...prev, line]);
+        if (i === allLines.length - 1) setIsTyping(false);
+      }, i * 80);
+    });
+  }, [activeModule]);
+
+  const statusColor = (status) => {
+    if (status === "READY") return "#00FF88";
+    if (status === "IN DEV") return "#FFD700";
+    return "#666";
+  };
+
+  const s = {
+    container: { position: "relative", width: "100vw", height: "100vh", background: "#000", fontFamily: "'Courier New', monospace", color: "#FFD700", overflow: "hidden" },
+    canvas: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: 0 },
+    overlay: { position: "relative", zIndex: 1, width: "100%", height: "100%", display: "flex", flexDirection: "column" },
+    header: { padding: "20px 30px 10px", borderBottom: "1px solid rgba(255,215,0,0.2)", display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(0,0,0,0.8)" },
+    title: { fontSize: "28px", fontWeight: "bold", letterSpacing: "12px", color: "#FFD700", textShadow: "0 0 20px rgba(255,215,0,0.5)", transform: glitchActive ? "translate(" + (Math.random()*4-2) + "px, " + (Math.random()*2-1) + "px)" : "none" },
+    subtitle: { fontSize: "10px", letterSpacing: "3px", color: "rgba(255,215,0,0.5)", marginTop: "4px" },
+    headerRight: { textAlign: "right", fontSize: "10px", color: "rgba(255,215,0,0.4)", letterSpacing: "1px" },
+    body: { flex: 1, display: "flex", overflow: "hidden" },
+    sidebar: { width: "280px", borderRight: "1px solid rgba(255,215,0,0.15)", background: "rgba(0,0,0,0.85)", padding: "15px 0", overflowY: "auto" },
+    mainPanel: { flex: 1, display: "flex", flexDirection: "column", background: "rgba(0,0,0,0.75)" },
+    descBar: { padding: "15px 25px", borderBottom: "1px solid rgba(255,215,0,0.1)", fontSize: "12px", color: "rgba(255,215,0,0.7)", lineHeight: "1.6", background: "rgba(0,0,0,0.5)" },
+    terminal: { flex: 1, padding: "20px 25px", overflowY: "auto", fontFamily: "'Courier New', monospace", fontSize: "13px", lineHeight: "1.7" },
+    footer: { padding: "8px 30px", borderTop: "1px solid rgba(255,215,0,0.15)", background: "rgba(0,0,0,0.9)", display: "flex", justifyContent: "space-between", fontSize: "10px", color: "rgba(255,215,0,0.3)", letterSpacing: "1px" },
+    bootScreen: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", background: "#000", zIndex: 10, display: "flex", flexDirection: "column", justifyContent: "center", padding: "15% 20%", transition: "opacity 0.8s" },
+    bootLine: { fontFamily: "'Courier New', monospace", fontSize: "14px", color: "#FFD700", lineHeight: "1.8", opacity: 0.8 },
+    scanline: { position: "absolute", top: 0, left: 0, width: "100%", height: "100%", background: "repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px)", pointerEvents: "none", zIndex: 5 },
+    welcomePanel: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.75)", gap: "20px" },
+    welcomeText: { fontSize: "60px", fontWeight: "bold", letterSpacing: "20px", color: "#FFD700", textShadow: "0 0 40px rgba(255,215,0,0.4), 0 0 80px rgba(255,215,0,0.2)", transform: glitchActive ? "translate(" + (Math.random()*6-3) + "px, " + (Math.random()*3-1.5) + "px) skew(" + (Math.random()*2-1) + "deg)" : "none" },
+  };
+
+  if (bootSequence) {
+    return (
+      <div style={s.container}>
+        <canvas ref={canvasRef} style={s.canvas} />
+        <div style={s.bootScreen}>
+          {bootLines.map((line, i) => (
+            <div key={i} style={{
+              ...s.bootLine,
+              color: line.includes("OPERATIONAL") ? "#00FF88" : 
+                     line.includes("READY") || line.includes("ONLINE") ? "#00FF88" :
+                     line.includes("UTSA") ? "#00FF88" : "#FFD700",
+            }}>
+              {line.includes("OPERATIONAL") ? "\u25B6 " : line ? "  " : ""}{line}
+            </div>
+          ))}
+          <div style={{ ...s.bootLine, color: "#FFD700", marginTop: "20px", animation: "blink 1s infinite" }}>{"\u2588"}</div>
+        </div>
+        <div style={s.scanline} />
+        <style>{"@keyframes blink { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }"}</style>
+      </div>
+    );
+  }
+
+  const activeMod = modules.find(m => m.id === activeModule);
+
+  return (
+    <div style={s.container}>
+      <canvas ref={canvasRef} style={s.canvas} />
+      <div style={s.overlay}>
+        <div style={s.header}>
+          <div>
+            <div style={s.title}>ZETTON</div>
+            <div style={s.subtitle}>QUANTUM SOFTWARE REVERSE ENGINEERING FRAMEWORK</div>
+          </div>
+          <div style={s.headerRight}>
+            <div>v0.1.0 // OPERATIONAL</div>
+            <div style={{ marginTop: "2px" }}>UTSA CYBER JEDIS QUANTUM CYBERSECURITY RIG</div>
+          </div>
+        </div>
+
+        <div style={s.body}>
+          <div style={s.sidebar}>
+            <div style={{ padding: "0 20px 12px", fontSize: "10px", letterSpacing: "3px", color: "rgba(255,215,0,0.3)", borderBottom: "1px solid rgba(255,215,0,0.1)", marginBottom: "8px" }}>
+              MODULES
+            </div>
+            {modules.map(mod => (
+              <button
+                key={mod.id}
+                style={{
+                  width: "100%", padding: "12px 20px", border: "none",
+                  borderLeft: activeModule === mod.id ? "3px solid " + mod.color : "3px solid transparent",
+                  background: activeModule === mod.id ? "rgba(255,215,0,0.08)" : "transparent",
+                  color: activeModule === mod.id ? mod.color : "rgba(255,215,0,0.6)",
+                  fontFamily: "'Courier New', monospace", fontSize: "12px", textAlign: "left",
+                  cursor: "pointer", transition: "all 0.2s", display: "flex", alignItems: "center",
+                  gap: "12px", letterSpacing: "1px",
+                }}
+                onClick={() => setActiveModule(mod.id)}
+                onMouseEnter={e => { if (activeModule !== mod.id) { e.currentTarget.style.background = "rgba(255,215,0,0.04)"; e.currentTarget.style.color = mod.color; }}}
+                onMouseLeave={e => { if (activeModule !== mod.id) { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "rgba(255,215,0,0.6)"; }}}
+              >
+                <div style={{ fontSize: "18px", color: activeModule === mod.id ? mod.color : "rgba(255,215,0,0.4)", width: "24px", textAlign: "center" }}>{mod.icon}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: "11px", fontWeight: "bold", letterSpacing: "2px" }}>{mod.name}</div>
+                  <div style={{ fontSize: "9px", color: statusColor(mod.status), marginTop: "2px", letterSpacing: "1px" }}>{"\u25CF"} {mod.status}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {activeModule ? (
+            <div style={s.mainPanel}>
+              <div style={s.descBar}>
+                <span style={{ color: activeMod.color, fontWeight: "bold" }}>{activeMod.icon} {activeMod.name}</span>
+                <span style={{ margin: "0 10px", color: "rgba(255,215,0,0.2)" }}>|</span>
+                {activeMod.desc}
+              </div>
+              <div style={s.terminal}>
+                {typedLines.map((line, i) => {
+                  let color = "#00FF88";
+                  if (i === 0) color = "#FFD700";
+                  else if (line.includes("CRITICAL")) color = "#FF4444";
+                  else if (line.includes("HIGH")) color = "#FF8800";
+                  else if (line.includes("WARNING")) color = "#FFD700";
+                  else if (line.includes("SECURE") || line.includes("DETECTED") || line.includes("READY") || line.includes("Available")) color = "#00FF88";
+                  else if (line.includes("\u2500")) color = "rgba(255,215,0,0.3)";
+                  else if (line.includes("\u250C") || line.includes("\u2502") || line.includes("\u2514")) color = "rgba(255,215,0,0.4)";
+                  else if (line.includes("COMING SOON") || line.includes("PLANNED") || line.includes("Planned")) color = "#95A5A6";
+                  else if (line === "") color = "transparent";
+                  return <div key={i} style={{ color: i === 0 ? "#FFD700" : color, opacity: i === 0 ? 1 : 0.85, whiteSpace: "pre" }}>{line}</div>;
+                })}
+                {isTyping && <span style={{ color: "#FFD700", animation: "blink 1s infinite" }}>{"\u2588"}</span>}
+              </div>
+            </div>
+          ) : (
+            <div style={s.welcomePanel}>
+              <div style={s.welcomeText}>ZETTON</div>
+              <div style={{ fontSize: "12px", letterSpacing: "6px", color: "rgba(255,215,0,0.4)" }}>QUANTUM SOFTWARE REVERSE ENGINEERING</div>
+              <div style={{ fontSize: "10px", letterSpacing: "4px", color: "rgba(0,255,136,0.4)", marginTop: "10px" }}>UTSA CYBER JEDIS QUANTUM CYBERSECURITY RIG</div>
+              <div style={{ display: "flex", gap: "30px", marginTop: "30px" }}>
+                {[["6", "COMMANDS"], ["15+", "CRYPTO ALGOS"], ["3", "FIPS STANDARDS"], ["\u2713", "OPERATIONAL"]].map(([num, label], i) => (
+                  <div key={i} style={{ textAlign: "center" }}>
+                    <div style={{ fontSize: "28px", fontWeight: "bold", color: i === 3 ? "#00FF88" : "#FFD700" }}>{num}</div>
+                    <div style={{ fontSize: "9px", letterSpacing: "2px", color: "rgba(255,215,0,0.4)", marginTop: "4px" }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ marginTop: "40px", fontSize: "11px", color: "rgba(255,215,0,0.25)", letterSpacing: "2px" }}>SELECT A MODULE TO BEGIN</div>
+            </div>
+          )}
+        </div>
+
+        <div style={s.footer}>
+          <span>ZETTON FRAMEWORK // MIT LICENSE</span>
+          <span>github.com/keebanvillarreal/zetton</span>
+          <span>BACKEND: QASM_SIMULATOR // 32 QUBITS</span>
+        </div>
+      </div>
+      <div style={s.scanline} />
+      <style>{"@keyframes blink { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }"}</style>
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(React.createElement(ZettonDemo));
+    </script>
+</body>
+</html>
