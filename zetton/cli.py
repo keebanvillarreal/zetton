@@ -171,6 +171,8 @@ def main(ctx):
         console.print("  [cyan]cfg[/cyan]        Control flow graph analysis")
         console.print("  [cyan]dataflow[/cyan]   Data flow and taint analysis")
         console.print("  [cyan]pqc[/cyan]        Post-quantum cryptography analysis")
+        console.print("  [cyan]pcap[/cyan]       Analyze PCAP/PCAPNG for TLS crypto & PQC readiness")
+        console.print("  [cyan]report[/cyan]     Unified report (HTML/JSON/Markdown) with CBOM")
         console.print("  [cyan]status[/cyan]     Display feature status")
         console.print("  [cyan]config[/cyan]     Configure settings")
         console.print("  [cyan]quantum[/cyan]    Quantum backend management")
@@ -1804,6 +1806,1482 @@ def pqc(binary_path: str, compliance: bool, output: Optional[str]):
         console.print(f"[dim]Report saved to: {output}[/dim]")
 
 
+# ─── REPORT ─────────────────────────────────────────────────────────────────
+
+# ── Data-collection helpers (return dicts, no console output) ───────────────
+
+def _report_collect_binary(binary) -> dict:
+    """Collect binary analysis data."""
+    from zetton.core.binary import BinaryFormat
+    data = {}
+    try:
+        info = binary.info()
+    except Exception:
+        info = {}
+    data.update(info)
+    data["format"]       = binary.format.name
+    data["architecture"] = binary.architecture.name
+    data["bits"]         = binary.bits
+    data["endianness"]   = getattr(binary, "endianness", "unknown")
+    data["entry_point"]  = f"0x{binary.entry_point:08X}"
+    data["size"]         = len(binary.raw_data)
+    data["md5"]          = binary.md5
+    data["sha256"]        = binary.sha256
+    if binary.format == BinaryFormat.ELF:
+        data["security"] = {k: v for k, v in detect_elf_security(binary).items()
+                            if not k.startswith("_")}
+    else:
+        data["security"] = {}
+    data["sections"] = [
+        {"name": s.name, "vaddr": hex(s.virtual_address),
+         "size": s.raw_size, "entropy": round(s.entropy, 4)}
+        for s in binary.sections
+    ]
+    data["imports"] = [
+        {"name": i.name,
+         "library": getattr(i, "library", None) or "",
+         "address": hex(i.address) if getattr(i, "address", None) else ""}
+        for i in binary.imports
+    ]
+    data["exports"] = [
+        {"name": e.name, "address": hex(e.address)}
+        for e in binary.exports
+    ]
+    data["symbols"] = [
+        {"name": s.name, "address": hex(s.address), "size": s.size}
+        for s in binary.symbols[:200]
+    ]
+    return data
+
+
+def _report_collect_crypto(binary) -> dict:
+    """Collect crypto-detection data."""
+    from zetton.crypto.constants import CRYPTO_CONSTANTS
+    raw = binary.raw_data
+    findings = []
+    MIN_PATTERN_SIZE = 3
+    ALGO_NAMES = {
+        "aes_sbox": "AES", "aes_rcon": "AES",
+        "sha256": "SHA-256", "sha512": "SHA-512",
+        "md5": "MD5", "des": "DES/3DES",
+        "chacha": "ChaCha20", "salsa20": "Salsa20",
+        "blowfish": "Blowfish", "rc4": "RC4",
+        "rsa": "RSA", "ecc": "ECDSA/ECDH",
+        "pqc_kyber": "Kyber (ML-KEM)",
+        "pqc_dilithium": "Dilithium (ML-DSA)",
+    }
+    for category, patterns in CRYPTO_CONSTANTS.items():
+        for pattern_name, pattern_bytes in patterns.items():
+            if not isinstance(pattern_bytes, (bytes, bytearray)):
+                continue
+            if len(pattern_bytes) < MIN_PATTERN_SIZE:
+                continue
+            offset = 0
+            while True:
+                offset = raw.find(pattern_bytes, offset)
+                if offset == -1:
+                    break
+                section_name = "unknown"
+                for sec in binary.sections:
+                    if sec.raw_offset <= offset < sec.raw_offset + sec.raw_size:
+                        section_name = sec.name
+                        break
+                findings.append({
+                    "algorithm": ALGO_NAMES.get(category, category.upper()),
+                    "category": category,
+                    "pattern": pattern_name,
+                    "offset": offset,
+                    "section": section_name,
+                    "match_size": len(pattern_bytes),
+                })
+                offset += 1
+    algo_counts: dict = {}
+    for f in findings:
+        algo_counts[f["algorithm"]] = algo_counts.get(f["algorithm"], 0) + 1
+    return {"findings": findings, "summary": algo_counts}
+
+
+def _report_collect_forensics(binary) -> dict:
+    """Collect forensics data."""
+    import struct, datetime
+    from zetton.crypto.constants import CRYPTO_CONSTANTS
+    raw = binary.raw_data
+    issues = []
+
+    # Embedded timestamp scan
+    ts_min = int(datetime.datetime(2020, 1, 1).timestamp())
+    ts_max = int(datetime.datetime(2030, 12, 31).timestamp())
+    timestamps = []
+    for i in range(0, len(raw) - 4, 4):
+        val = struct.unpack("<I", raw[i:i+4])[0]
+        if ts_min <= val <= ts_max:
+            timestamps.append({
+                "offset": hex(i),
+                "timestamp": datetime.datetime.fromtimestamp(val).isoformat(),
+            })
+
+    # Hardcoded key checks
+    weak_keys = [
+        (bytes([0x00] * 16), "Null AES-128 key"),
+        (bytes([0x00] * 32), "Null AES-256 key"),
+        (bytes([0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6,
+                0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c]),
+         "NIST AES-128 test vector (commonly hardcoded)"),
+    ]
+    for key_bytes, desc in weak_keys:
+        offset = raw.find(key_bytes)
+        if offset != -1:
+            issues.append({"severity": "CRITICAL",
+                           "description": f"Hardcoded key: {desc}",
+                           "offset": hex(offset)})
+
+    # ECB mode
+    for pattern in [b"ecb", b"ECB", b"_ecb_", b"_ECB_"]:
+        offset = raw.find(pattern)
+        if offset != -1:
+            issues.append({"severity": "WARNING",
+                           "description": "ECB mode reference found",
+                           "offset": hex(offset)})
+    for sym in binary.symbols:
+        if "ecb" in sym.name.lower():
+            issues.append({"severity": "WARNING",
+                           "description": f"ECB mode function: {sym.name}",
+                           "offset": hex(sym.address)})
+
+    # Weak PRNG
+    weak_prng = [i.name for i in binary.imports if i.name in ("srand","rand","random","drand48")]
+    if weak_prng:
+        issues.append({"severity": "WARNING",
+                       "description": f"Weak PRNG: {', '.join(weak_prng)}",
+                       "offset": "0x0"})
+
+    # Dangerous functions
+    dangerous = {"system": "command execution", "strcpy": "buffer overflow",
+                 "sprintf": "buffer overflow", "gets": "buffer overflow"}
+    for imp in binary.imports:
+        if imp.name in dangerous:
+            issues.append({"severity": "INFO",
+                           "description": f"Dangerous function: {imp.name} ({dangerous[imp.name]})",
+                           "offset": "0x0"})
+
+    # Quantum threat scan
+    crypto_found = set()
+    for category, patterns in CRYPTO_CONSTANTS.items():
+        for _, pattern_bytes in patterns.items():
+            if isinstance(pattern_bytes, (bytes, bytearray)) and len(pattern_bytes) >= 3:
+                if raw.find(pattern_bytes) != -1:
+                    crypto_found.add(category)
+                    break
+
+    quantum_threats = {
+        "aes_sbox":      ("AES",          "LOW",      "Grover's provides only quadratic speedup; AES-256 remains secure"),
+        "sha256":        ("SHA-256",       "LOW",      "~128-bit post-quantum security"),
+        "sha512":        ("SHA-512",       "LOW",      "~256-bit post-quantum security"),
+        "md5":           ("MD5",           "MEDIUM",   "Already broken classically; quantum makes it worse"),
+        "des":           ("DES/3DES",      "HIGH",     "Grover's makes 56-bit key trivial"),
+        "rsa":           ("RSA",           "CRITICAL", "Shor's algorithm breaks RSA in polynomial time"),
+        "ecc":           ("ECDSA/ECDH",    "CRITICAL", "Shor's algorithm breaks elliptic curve crypto"),
+        "pqc_kyber":     ("Kyber (ML-KEM)","NONE",     "Post-quantum secure (NIST FIPS 203)"),
+        "pqc_dilithium": ("Dilithium",     "NONE",     "Post-quantum secure (NIST FIPS 204)"),
+    }
+    quantum_assessment = {
+        cat: {"algorithm": v[0], "level": v[1], "assessment": v[2]}
+        for cat, v in quantum_threats.items()
+        if cat in crypto_found
+    }
+
+    return {
+        "issues": issues,
+        "crypto_found": list(crypto_found),
+        "timestamps": timestamps[:10],
+        "quantum_assessment": quantum_assessment,
+    }
+
+
+def _report_collect_cfg(binary) -> dict:
+    """Collect CFG data."""
+    try:
+        from zetton.analyzers.disasm import Disassembler
+        disasm = Disassembler(binary)
+    except Exception as e:
+        return {"functions": [], "error": str(e)}
+
+    target_functions = [
+        s for s in binary.symbols
+        if s.size > 0 and not s.name.startswith("_") and not s.name.startswith(".")
+    ]
+
+    all_func_data = []
+    for sym in target_functions:
+        try:
+            func_data = binary.read_bytes(_vaddr_to_offset(binary, sym.address), sym.size)
+            instructions = list(disasm.disassemble_bytes(func_data, sym.address, 1000))
+        except Exception:
+            continue
+        if not instructions:
+            continue
+        blocks = _build_basic_blocks(instructions)
+        edges  = _detect_edges(instructions, blocks, sym.address, sym.address + sym.size)
+        loops  = _detect_loops(blocks, edges)
+        calls  = [i for i in instructions if i.is_call]
+        jumps  = [i for i in instructions if i.is_jump]
+        rets   = [i for i in instructions if i.is_ret]
+        num_edges = len(edges)
+        num_nodes = len(blocks)
+        complexity = max(num_edges - num_nodes + 2, 1)
+        all_func_data.append({
+            "name": sym.name,
+            "address": hex(sym.address),
+            "size": sym.size,
+            "instructions": len(instructions),
+            "basic_blocks": num_nodes,
+            "edges": num_edges,
+            "cyclomatic_complexity": complexity,
+            "loops": len(loops),
+            "calls": len(calls),
+            "branches": len(jumps),
+            "returns": len(rets),
+        })
+    return {"functions": all_func_data}
+
+
+def _report_collect_dataflow(binary) -> dict:
+    """Collect dataflow / taint data."""
+    default_sources = {
+        "recv": "Network input", "recvfrom": "Network input",
+        "read": "File/socket read", "fread": "File read",
+        "fgets": "File/stdin read", "gets": "Stdin read (dangerous)",
+        "scanf": "Formatted stdin", "getenv": "Environment variable",
+    }
+    default_sinks = {
+        "system": ("Command execution", "CRITICAL"),
+        "execve": ("Process execution", "CRITICAL"),
+        "printf": ("Format string", "HIGH"),
+        "sprintf": ("Format string / buffer overflow", "CRITICAL"),
+        "strcpy": ("Buffer overflow", "HIGH"),
+        "strcat": ("Buffer overflow", "HIGH"),
+        "memcpy": ("Memory copy", "MEDIUM"),
+        "send": ("Network send", "MEDIUM"),
+    }
+    import_names = {imp.name: imp for imp in binary.imports}
+    found_sources = {
+        n: {"description": d, "address": hex(import_names[n].address) if import_names[n].address else ""}
+        for n, d in default_sources.items() if n in import_names
+    }
+    found_sinks = {
+        n: {"description": d, "severity": s,
+            "address": hex(import_names[n].address) if import_names[n].address else ""}
+        for n, (d, s) in default_sinks.items() if n in import_names
+    }
+
+    flows: list = []
+    if found_sources and found_sinks:
+        try:
+            from zetton.analyzers.disasm import Disassembler
+            disasm = Disassembler(binary)
+            all_instructions = disasm.disassemble()
+
+            import_addrs: dict = {}
+            for imp in binary.imports:
+                if imp.address:
+                    import_addrs[imp.address] = imp.name
+            try:
+                import lief
+                elf = lief.ELF.parse(str(binary.path))
+                if elf:
+                    for reloc in elf.pltgot_relocations:
+                        if reloc.symbol and reloc.symbol.name:
+                            import_addrs[reloc.address] = reloc.symbol.name
+            except Exception:
+                pass
+
+            func_symbols = sorted(
+                [s for s in binary.symbols if s.size > 0], key=lambda s: s.address)
+
+            def _containing(addr):
+                for s in func_symbols:
+                    if s.address <= addr < s.address + s.size:
+                        return s.name
+                return "unknown"
+
+            source_calls, sink_calls = [], []
+            for insn in all_instructions:
+                if insn.is_call:
+                    target = _parse_jump_target(insn)
+                    if target is not None:
+                        fname = import_addrs.get(target, "")
+                        if not fname:
+                            for sym in binary.symbols:
+                                if sym.address == target and sym.name:
+                                    fname = sym.name
+                                    break
+                        if fname in found_sources:
+                            source_calls.append({"function": fname, "call_addr": insn.address})
+                        if fname in found_sinks:
+                            sink_calls.append({"function": fname, "call_addr": insn.address})
+
+            flow_id = 0
+            for src in source_calls:
+                sf = _containing(src["call_addr"])
+                for snk in sink_calls:
+                    tkf = _containing(snk["call_addr"])
+                    if sf == tkf and src["call_addr"] < snk["call_addr"]:
+                        flow_id += 1
+                        flows.append({
+                            "id": flow_id,
+                            "source": src["function"],
+                            "sink": snk["function"],
+                            "function": sf,
+                            "source_addr": hex(src["call_addr"]),
+                            "sink_addr": hex(snk["call_addr"]),
+                            "severity": found_sinks[snk["function"]]["severity"],
+                            "type": "direct",
+                        })
+        except Exception:
+            pass
+
+    return {"sources": found_sources, "sinks": found_sinks, "flows": flows}
+
+
+def _report_collect_pqc(binary) -> dict:
+    """Collect PQC analysis data."""
+    import struct
+    from zetton.crypto.constants import CRYPTO_CONSTANTS
+    raw = binary.raw_data
+    MIN_PATTERN_SIZE = 3
+
+    classical_crypto = {
+        "rsa": {"name": "RSA", "threat": "CRITICAL",
+                "attack": "Shor's algorithm (polynomial time)",
+                "recommendation": "Replace with ML-KEM (FIPS 203) or ML-DSA (FIPS 204)"},
+        "ecc": {"name": "ECDSA/ECDH", "threat": "CRITICAL",
+                "attack": "Shor's algorithm (polynomial time)",
+                "recommendation": "Replace with ML-DSA (FIPS 204) for signatures"},
+        "des": {"name": "DES/3DES", "threat": "HIGH",
+                "attack": "Grover's reduces 56-bit key to trivial",
+                "recommendation": "Replace with AES-256"},
+        "md5": {"name": "MD5", "threat": "MEDIUM",
+                "attack": "Grover's further weakens already-broken hash",
+                "recommendation": "Replace with SHA-256 or SHA-3"},
+    }
+    pqc_crypto = {
+        "pqc_kyber":     {"name": "ML-KEM (Kyber)",    "standard": "NIST FIPS 203",
+                          "type": "Key Encapsulation",  "status": "quantum-resistant"},
+        "pqc_dilithium": {"name": "ML-DSA (Dilithium)", "standard": "NIST FIPS 204",
+                          "type": "Digital Signature",  "status": "quantum-resistant"},
+    }
+    quantum_safe = {
+        "aes_sbox": {"name": "AES",    "note": "AES-256 provides ~128-bit post-quantum security"},
+        "aes_rcon": {"name": "AES",    "note": "AES-256 provides ~128-bit post-quantum security"},
+        "sha256":   {"name": "SHA-256","note": "~128-bit post-quantum security"},
+        "sha512":   {"name": "SHA-512","note": "~256-bit post-quantum security"},
+    }
+
+    found_classical, found_pqc, found_safe = {}, {}, {}
+    for category, patterns in CRYPTO_CONSTANTS.items():
+        for _, pattern_bytes in patterns.items():
+            if not isinstance(pattern_bytes, (bytes, bytearray)):
+                continue
+            if len(pattern_bytes) < MIN_PATTERN_SIZE:
+                continue
+            if raw.find(pattern_bytes) != -1:
+                if category in classical_crypto:
+                    found_classical[category] = classical_crypto[category]
+                elif category in pqc_crypto:
+                    found_pqc[category] = pqc_crypto[category]
+                elif category in quantum_safe:
+                    found_safe[category] = quantum_safe[category]
+                break
+
+    # Kyber/Dilithium prime constants
+    if raw.find(struct.pack('<I', 3329)) != -1 and "pqc_kyber" not in found_pqc:
+        found_pqc["pqc_kyber"] = pqc_crypto["pqc_kyber"]
+    if raw.find(struct.pack('<I', 8380417)) != -1 and "pqc_dilithium" not in found_pqc:
+        found_pqc["pqc_dilithium"] = pqc_crypto["pqc_dilithium"]
+
+    sphincs_detected = any(raw.find(m) != -1
+                           for m in [b"SPHINCS", b"sphincs", b"SLH-DSA", b"slh-dsa"])
+    if sphincs_detected:
+        found_pqc["pqc_sphincs"] = {
+            "name": "SLH-DSA (SPHINCS+)", "standard": "NIST FIPS 205",
+            "type": "Hash-based Signature", "status": "quantum-resistant",
+        }
+
+    score = min(len(found_pqc) * 25 + (25 if not found_classical else 0), 100)
+    grade = "A" if score >= 75 else ("B" if score >= 50 else ("C" if score >= 25 else "D"))
+
+    recs = []
+    for info in found_classical.values():
+        recs.append(info["recommendation"])
+    if "pqc_kyber" not in found_pqc:
+        recs.append("Implement ML-KEM (FIPS 203) for key encapsulation")
+    if "pqc_dilithium" not in found_pqc:
+        recs.append("Implement ML-DSA (FIPS 204) for digital signatures")
+    if not sphincs_detected:
+        recs.append("Consider SLH-DSA (FIPS 205) for hash-based signatures")
+
+    return {
+        "vulnerable": found_classical,
+        "pqc_algorithms": found_pqc,
+        "safe": {k: v["name"] for k, v in found_safe.items()},
+        "score": score,
+        "grade": grade,
+        "recommendations": recs,
+        "fips": {
+            "FIPS_203_ML-KEM":     "pqc_kyber" in found_pqc,
+            "FIPS_204_ML-DSA":     "pqc_dilithium" in found_pqc,
+            "FIPS_205_SLH-DSA":    sphincs_detected,
+        },
+    }
+
+
+def _build_cbom(crypto_data: dict, forensics_data: dict, pqc_data: dict) -> dict:
+    """Build a Cryptographic Bill of Materials from collected analysis data."""
+    ALGO_META = {
+        "AES":           {"type": "Symmetric Cipher",    "quantum_vulnerable": False, "threat_level": "LOW"},
+        "SHA-256":       {"type": "Hash Function",        "quantum_vulnerable": False, "threat_level": "LOW"},
+        "SHA-512":       {"type": "Hash Function",        "quantum_vulnerable": False, "threat_level": "LOW"},
+        "MD5":           {"type": "Hash Function",        "quantum_vulnerable": True,  "threat_level": "MEDIUM"},
+        "DES/3DES":      {"type": "Symmetric Cipher",    "quantum_vulnerable": True,  "threat_level": "HIGH"},
+        "ChaCha20":      {"type": "Stream Cipher",        "quantum_vulnerable": False, "threat_level": "LOW"},
+        "Salsa20":       {"type": "Stream Cipher",        "quantum_vulnerable": False, "threat_level": "LOW"},
+        "Blowfish":      {"type": "Symmetric Cipher",    "quantum_vulnerable": False, "threat_level": "LOW"},
+        "RC4":           {"type": "Stream Cipher",        "quantum_vulnerable": False, "threat_level": "MEDIUM"},
+        "RSA":           {"type": "Asymmetric / KEM",    "quantum_vulnerable": True,  "threat_level": "CRITICAL"},
+        "ECDSA/ECDH":    {"type": "Asymmetric / Sig",    "quantum_vulnerable": True,  "threat_level": "CRITICAL"},
+        "Kyber (ML-KEM)":    {"type": "PQC / KEM",       "quantum_vulnerable": False, "threat_level": "NONE",
+                              "standard": "NIST FIPS 203"},
+        "Dilithium (ML-DSA)":{"type": "PQC / Signature", "quantum_vulnerable": False, "threat_level": "NONE",
+                              "standard": "NIST FIPS 204"},
+        "ML-KEM (Kyber)":    {"type": "PQC / KEM",       "quantum_vulnerable": False, "threat_level": "NONE",
+                              "standard": "NIST FIPS 203"},
+        "ML-DSA (Dilithium)":{"type": "PQC / Signature", "quantum_vulnerable": False, "threat_level": "NONE",
+                              "standard": "NIST FIPS 204"},
+        "SLH-DSA (SPHINCS+)":{"type": "PQC / Hash-Sig",  "quantum_vulnerable": False, "threat_level": "NONE",
+                              "standard": "NIST FIPS 205"},
+    }
+
+    # Aggregate algorithms from crypto findings
+    seen: dict = {}
+    for f in crypto_data.get("findings", []):
+        algo = f["algorithm"]
+        if algo not in seen:
+            meta = ALGO_META.get(algo, {"type": "Unknown", "quantum_vulnerable": False, "threat_level": "UNKNOWN"})
+            seen[algo] = {"name": algo, "occurrences": 0,
+                          "locations": [], **meta}
+        seen[algo]["occurrences"] += 1
+        seen[algo]["locations"].append(f"0x{f['offset']:08X} ({f['section']})")
+
+    # Merge PQC algorithms (may not appear in raw crypto scan)
+    for info in pqc_data.get("pqc_algorithms", {}).values():
+        name = info["name"]
+        if name not in seen:
+            meta = ALGO_META.get(name, {"type": info.get("type","PQC"),
+                                        "quantum_vulnerable": False,
+                                        "threat_level": "NONE",
+                                        "standard": info.get("standard","")})
+            seen[name] = {"name": name, "occurrences": 1, "locations": [], **meta}
+
+    algorithms = sorted(seen.values(), key=lambda a: (
+        0 if a.get("threat_level") == "CRITICAL" else
+        1 if a.get("threat_level") == "HIGH" else
+        2 if a.get("threat_level") == "MEDIUM" else
+        3 if a.get("threat_level") == "LOW" else 4
+    ))
+
+    # Collect unique recommendations
+    recs = list(dict.fromkeys(pqc_data.get("recommendations", [])))
+
+    # Risk score: weighted by severity
+    WEIGHTS = {"CRITICAL": 40, "HIGH": 20, "MEDIUM": 10, "LOW": 0, "NONE": 0, "UNKNOWN": 5}
+    risk = min(sum(WEIGHTS.get(a.get("threat_level","UNKNOWN"), 5) for a in algorithms
+                   if a.get("quantum_vulnerable")), 100)
+
+    return {
+        "algorithms": algorithms,
+        "quantum_vulnerable": [a["name"] for a in algorithms if a.get("quantum_vulnerable")],
+        "quantum_resistant": [a["name"] for a in algorithms if not a.get("quantum_vulnerable")],
+        "risk_score": risk,
+        "recommendations": recs,
+    }
+
+
+# ── The report command ───────────────────────────────────────────────────────
+
+@main.command()
+@click.argument('binary_path', type=click.Path(exists=True))
+@click.option('--format', '-f', 'output_format',
+              type=click.Choice(['json', 'html', 'markdown']),
+              default='json', show_default=True,
+              help='Output format')
+@click.option('--output', '-o', type=click.Path(),
+              help='Output file (default: stdout for JSON/Markdown, report.html for HTML)')
+@click.option('--open', 'open_browser', is_flag=True,
+              help='Open the HTML report in a browser after generation')
+@click.option('--skip', multiple=True,
+              type=click.Choice(['cfg', 'dataflow']),
+              help='Skip slow analyses (cfg, dataflow) for faster runs')
+def report(binary_path: str, output_format: str, output: Optional[str],
+           open_browser: bool, skip: tuple):
+    """
+    Generate a unified analysis report.
+
+    Runs all 6 analyses (analyze, crypto, forensics, cfg, dataflow, pqc)
+    on a binary and produces a combined report with a CBOM section.
+
+    Output formats:
+      json      Canonical structured data (default)
+      html      Dark-themed HTML with gold accents
+      markdown  GitHub-flavored Markdown
+
+    BINARY_PATH: Path to the binary file to analyze
+
+    Examples:
+        zetton report ./sample_aes_ecb
+        zetton report ./sample_aes_ecb --format html -o report.html --open
+        zetton report ./sample_aes_ecb --format markdown -o report.md
+        zetton report ./sample_aes_ecb --skip cfg --skip dataflow
+    """
+    from zetton.core.binary import Binary
+    from zetton import __version__ as _ver
+    import datetime
+
+    print_banner()
+    start_time = time.time()
+
+    console.print(f"[bold cyan]Unified Report[/bold cyan] — {binary_path}")
+    console.print(f"[dim]Output format: {output_format}[/dim]\n")
+
+    # ── Load binary ──────────────────────────────────────────────────────
+    try:
+        binary = Binary.from_file(binary_path)
+    except Exception as e:
+        console.print(f"[bold red]Error loading binary:[/bold red] {e}")
+        sys.exit(1)
+
+    # ── Run all analyses ─────────────────────────────────────────────────
+    analyses = [
+        ("analyze",   "Binary analysis",      lambda: _report_collect_binary(binary)),
+        ("crypto",    "Crypto detection",     lambda: _report_collect_crypto(binary)),
+        ("forensics", "Forensics",            lambda: _report_collect_forensics(binary)),
+        ("pqc",       "PQC analysis",         lambda: _report_collect_pqc(binary)),
+        ("cfg",       "CFG analysis",         lambda: _report_collect_cfg(binary)),
+        ("dataflow",  "Dataflow analysis",    lambda: _report_collect_dataflow(binary)),
+    ]
+
+    results: dict = {}
+    for key, label, fn in analyses:
+        if key in skip:
+            console.print(f"  [dim]⏭  {label} (skipped)[/dim]")
+            results[key] = {}
+            continue
+        with console.status(f"  [cyan]Running {label}…[/cyan]"):
+            try:
+                results[key] = fn()
+                count = ""
+                if key == "crypto":
+                    count = f" ({len(results[key].get('findings',[]))} findings)"
+                elif key == "forensics":
+                    count = f" ({len(results[key].get('issues',[]))} issue(s))"
+                elif key == "cfg":
+                    count = f" ({len(results[key].get('functions',[]))} functions)"
+                elif key == "dataflow":
+                    count = f" ({len(results[key].get('flows',[]))} flow(s))"
+                console.print(f"  [green]✓[/green] {label}{count}")
+            except Exception as e:
+                console.print(f"  [yellow]⚠[/yellow] {label} failed: {e}")
+                results[key] = {"error": str(e)}
+
+    # ── Build CBOM ───────────────────────────────────────────────────────
+    cbom = _build_cbom(results.get("crypto", {}),
+                       results.get("forensics", {}),
+                       results.get("pqc", {}))
+
+    # ── Assemble canonical JSON report ───────────────────────────────────
+    full_report = {
+        "meta": {
+            "tool":      "Zetton",
+            "version":   _ver,
+            "timestamp": datetime.datetime.now().isoformat(),
+            "binary":    str(binary_path),
+            "format":    binary.format.name,
+        },
+        "cbom":      cbom,
+        "binary":    results.get("analyze", {}),
+        "crypto":    results.get("crypto", {}),
+        "forensics": results.get("forensics", {}),
+        "pqc":       results.get("pqc", {}),
+        "cfg":       results.get("cfg", {}),
+        "dataflow":  results.get("dataflow", {}),
+    }
+
+    # ── Format ───────────────────────────────────────────────────────────
+    elapsed = time.time() - start_time
+
+    if output_format == "json":
+        rendered = json.dumps(full_report, indent=2, default=str)
+        out_path = output or None
+        if out_path:
+            with open(out_path, "w") as f:
+                f.write(rendered)
+            console.print(f"\n[green]✓[/green] Report saved to [bold]{out_path}[/bold] in {elapsed:.2f}s")
+        else:
+            console.print()
+            print(rendered)
+
+    elif output_format == "html":
+        from zetton.formatters import format_html
+        rendered = format_html(full_report)
+        out_path = output or "report.html"
+        with open(out_path, "w") as f:
+            f.write(rendered)
+        console.print(f"\n[green]✓[/green] HTML report saved to [bold]{out_path}[/bold] in {elapsed:.2f}s")
+        if open_browser:
+            import webbrowser
+            webbrowser.open(f"file://{Path(out_path).resolve()}")
+
+    elif output_format == "markdown":
+        from zetton.formatters import format_markdown
+        rendered = format_markdown(full_report)
+        out_path = output or None
+        if out_path:
+            with open(out_path, "w") as f:
+                f.write(rendered)
+            console.print(f"\n[green]✓[/green] Markdown report saved to [bold]{out_path}[/bold] in {elapsed:.2f}s")
+        else:
+            console.print()
+            print(rendered)
+
+    # ── Print CBOM summary to terminal ───────────────────────────────────
+    if output_format != "json" or output:
+        console.print()
+        vuln = cbom.get("quantum_vulnerable", [])
+        resistant = cbom.get("quantum_resistant", [])
+        risk = cbom.get("risk_score", 0)
+        risk_color = "red" if risk >= 60 else ("yellow" if risk >= 30 else "green")
+
+        summary_table = Table(
+            title="CBOM Summary",
+            box=box.ROUNDED,
+            title_style="bold yellow",
+            border_style="dim",
+        )
+        summary_table.add_column("Category", style="dim", width=24)
+        summary_table.add_column("Algorithms", style="white")
+
+        summary_table.add_row("[red]Quantum-Vulnerable[/red]",
+                              ", ".join(vuln) if vuln else "[green]None[/green]")
+        summary_table.add_row("[cyan]Quantum-Resistant[/cyan]",
+                              ", ".join(resistant) if resistant else "[dim]None detected[/dim]")
+        summary_table.add_row(f"[{risk_color}]Risk Score[/{risk_color}]",
+                              f"[{risk_color}]{risk}/100[/{risk_color}]")
+        console.print(summary_table)
+
+
+# ─── PCAP ANALYSIS ──────────────────────────────────────────────────────────
+
+# ── TLS protocol databases ───────────────────────────────────────────────────
+# Tuples: (display_name, key_exchange_type, quantum_threat)
+# CRITICAL = RSA/ECDH key exchange broken by Shor's algorithm
+# HIGH     = DHE-RSA: authentication broken by Shor's, KE classically safe
+# LOW      = TLS 1.3 symmetric suite; quantum risk depends on named group
+# SAFE     = PQC or post-quantum hybrid
+
+_TLS_CIPHER_SUITES: dict = {
+    # ── RSA key exchange (CRITICAL) ──────────────────────────────────────
+    0x0001: ("TLS_RSA_WITH_NULL_MD5",               "RSA",     "CRITICAL"),
+    0x0004: ("TLS_RSA_WITH_RC4_128_MD5",            "RSA",     "CRITICAL"),
+    0x0005: ("TLS_RSA_WITH_RC4_128_SHA",            "RSA",     "CRITICAL"),
+    0x000A: ("TLS_RSA_WITH_3DES_EDE_CBC_SHA",       "RSA",     "CRITICAL"),
+    0x002F: ("TLS_RSA_WITH_AES_128_CBC_SHA",        "RSA",     "CRITICAL"),
+    0x0035: ("TLS_RSA_WITH_AES_256_CBC_SHA",        "RSA",     "CRITICAL"),
+    0x003C: ("TLS_RSA_WITH_AES_128_CBC_SHA256",     "RSA",     "CRITICAL"),
+    0x003D: ("TLS_RSA_WITH_AES_256_CBC_SHA256",     "RSA",     "CRITICAL"),
+    0x009C: ("TLS_RSA_WITH_AES_128_GCM_SHA256",     "RSA",     "CRITICAL"),
+    0x009D: ("TLS_RSA_WITH_AES_256_GCM_SHA384",     "RSA",     "CRITICAL"),
+    # ── DHE-RSA (HIGH) ───────────────────────────────────────────────────
+    0x0033: ("TLS_DHE_RSA_WITH_AES_128_CBC_SHA",        "DHE-RSA", "HIGH"),
+    0x0039: ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA",        "DHE-RSA", "HIGH"),
+    0x0067: ("TLS_DHE_RSA_WITH_AES_128_CBC_SHA256",     "DHE-RSA", "HIGH"),
+    0x006B: ("TLS_DHE_RSA_WITH_AES_256_CBC_SHA256",     "DHE-RSA", "HIGH"),
+    0x009E: ("TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",     "DHE-RSA", "HIGH"),
+    0x009F: ("TLS_DHE_RSA_WITH_AES_256_GCM_SHA384",     "DHE-RSA", "HIGH"),
+    0xCCAA: ("TLS_DHE_RSA_WITH_CHACHA20_POLY1305_SHA256","DHE-RSA", "HIGH"),
+    # ── ECDHE key exchange (CRITICAL) ────────────────────────────────────
+    0xC009: ("TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA",           "ECDHE", "CRITICAL"),
+    0xC00A: ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA",           "ECDHE", "CRITICAL"),
+    0xC013: ("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA",             "ECDHE", "CRITICAL"),
+    0xC014: ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",             "ECDHE", "CRITICAL"),
+    0xC023: ("TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256",        "ECDHE", "CRITICAL"),
+    0xC024: ("TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384",        "ECDHE", "CRITICAL"),
+    0xC027: ("TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256",          "ECDHE", "CRITICAL"),
+    0xC028: ("TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384",          "ECDHE", "CRITICAL"),
+    0xC02B: ("TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",        "ECDHE", "CRITICAL"),
+    0xC02C: ("TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",        "ECDHE", "CRITICAL"),
+    0xC02F: ("TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",          "ECDHE", "CRITICAL"),
+    0xC030: ("TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",          "ECDHE", "CRITICAL"),
+    0xCCA8: ("TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256",    "ECDHE", "CRITICAL"),
+    0xCCA9: ("TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256",  "ECDHE", "CRITICAL"),
+    # ── TLS 1.3 (symmetric-only suites; KE determined by named group) ────
+    0x1301: ("TLS_AES_128_GCM_SHA256",        "TLS1.3", "LOW"),
+    0x1302: ("TLS_AES_256_GCM_SHA384",        "TLS1.3", "LOW"),
+    0x1303: ("TLS_CHACHA20_POLY1305_SHA256",  "TLS1.3", "LOW"),
+    0x1304: ("TLS_AES_128_CCM_SHA256",        "TLS1.3", "LOW"),
+    0x1305: ("TLS_AES_128_CCM_8_SHA256",      "TLS1.3", "LOW"),
+}
+
+# Named groups from supported_groups (ext 0x000A) and key_share (ext 0x0033)
+_TLS_NAMED_GROUPS: dict = {
+    # Standard ECDH (CRITICAL - Shor's breaks ECDH)
+    0x0017: ("secp256r1 (P-256)", "ECDH", "CRITICAL"),
+    0x0018: ("secp384r1 (P-384)", "ECDH", "CRITICAL"),
+    0x0019: ("secp521r1 (P-521)", "ECDH", "CRITICAL"),
+    0x001D: ("x25519",            "ECDH", "CRITICAL"),
+    0x001E: ("x448",              "ECDH", "CRITICAL"),
+    # Finite-field DHE (HIGH)
+    0x0100: ("ffdhe2048", "DHE", "HIGH"),
+    0x0101: ("ffdhe3072", "DHE", "HIGH"),
+    0x0102: ("ffdhe4096", "DHE", "HIGH"),
+    0x0103: ("ffdhe6144", "DHE", "HIGH"),
+    0x0104: ("ffdhe8192", "DHE", "HIGH"),
+    # PQC hybrid groups (SAFE — classical + ML-KEM)
+    # Draft codes widely deployed in Chrome/Firefox/Cloudflare (2023–2024)
+    0x2F39: ("X25519Kyber768Draft00",        "Hybrid-PQC", "SAFE"),
+    0xFE30: ("X25519Kyber512Draft00",        "Hybrid-PQC", "SAFE"),
+    0xFE31: ("SecP256r1Kyber768Draft00",     "Hybrid-PQC", "SAFE"),
+    # IANA-assigned hybrid codes (2024+, draft-ietf-tls-hybrid-design)
+    0x11EB: ("X25519MLKEM768",               "Hybrid-PQC", "SAFE"),
+    0x11EC: ("SecP256r1MLKEM768",            "Hybrid-PQC", "SAFE"),
+    0x11ED: ("SecP384r1MLKEM1024",           "Hybrid-PQC", "SAFE"),
+    0x6399: ("X25519MLKEM768 (0x6399)",      "Hybrid-PQC", "SAFE"),
+    0x639A: ("SecP256r1MLKEM768 (0x639A)",   "Hybrid-PQC", "SAFE"),
+}
+
+_TLS_VERSIONS: dict = {
+    0x0300: "SSL 3.0",
+    0x0301: "TLS 1.0",
+    0x0302: "TLS 1.1",
+    0x0303: "TLS 1.2",
+    0x0304: "TLS 1.3",
+}
+
+
+# ── Raw TLS parsing helpers ──────────────────────────────────────────────────
+
+def _parse_tls_extensions(data: bytes) -> dict:
+    """Parse a TLS extension list into {ext_type: ext_bytes}."""
+    exts: dict = {}
+    i = 0
+    while i + 4 <= len(data):
+        ext_type = (data[i] << 8) | data[i + 1]
+        ext_len  = (data[i + 2] << 8) | data[i + 3]
+        if i + 4 + ext_len > len(data):
+            break
+        exts[ext_type] = data[i + 4 : i + 4 + ext_len]
+        i += 4 + ext_len
+    return exts
+
+
+def _parse_client_hello(body: bytes) -> Optional[dict]:
+    """Parse a TLS ClientHello handshake body (bytes after the 4-byte HS header)."""
+    result: dict = {"type": "ClientHello", "cipher_suites": []}
+    i = 0
+    if i + 34 > len(body):          # version (2) + random (32)
+        return None
+    result["legacy_version"] = (body[i] << 8) | body[i + 1]
+    i += 34                         # skip version + random
+
+    if i >= len(body): return result
+    sid_len = body[i]; i += 1 + sid_len
+
+    if i + 2 > len(body): return result
+    cs_bytes = (body[i] << 8) | body[i + 1]; i += 2
+    suites = []
+    for _ in range(cs_bytes // 2):
+        if i + 2 > len(body): break
+        suites.append((body[i] << 8) | body[i + 1])
+        i += 2
+    result["cipher_suites"] = [s for s in suites if s != 0x00FF]  # drop SCSV
+
+    if i >= len(body): return result
+    comp_len = body[i]; i += 1 + comp_len
+
+    if i + 2 > len(body): return result
+    ext_total = (body[i] << 8) | body[i + 1]; i += 2
+    if i + ext_total > len(body): return result
+
+    exts = _parse_tls_extensions(body[i : i + ext_total])
+
+    # supported_versions (0x002B) → list of versions the client offers
+    if 0x002B in exts:
+        vd = exts[0x002B]
+        if vd:
+            vl = vd[0]; j = 1
+            versions = []
+            while j + 1 <= vl:
+                versions.append((vd[j] << 8) | vd[j + 1])
+                j += 2
+            result["supported_versions"] = versions
+
+    # SNI (0x0000) → first hostname entry
+    if 0x0000 in exts:
+        sd = exts[0x0000]
+        if len(sd) >= 5 and sd[2] == 0:    # entry type 0 = host_name
+            nlen = (sd[3] << 8) | sd[4]
+            if 5 + nlen <= len(sd):
+                result["sni"] = sd[5 : 5 + nlen].decode("ascii", errors="replace")
+
+    # supported_groups (0x000A)
+    if 0x000A in exts:
+        gd = exts[0x000A]
+        if len(gd) >= 2:
+            gl = (gd[0] << 8) | gd[1]; j = 2
+            groups = []
+            while j + 1 < 2 + gl:
+                groups.append((gd[j] << 8) | gd[j + 1])
+                j += 2
+            result["supported_groups"] = groups
+
+    # key_share (0x0033) in ClientHello → list of offered groups
+    if 0x0033 in exts:
+        kd = exts[0x0033]
+        if len(kd) >= 2:
+            kl = (kd[0] << 8) | kd[1]; j = 2
+            ks_groups = []
+            while j + 3 < 2 + kl:
+                grp   = (kd[j] << 8) | kd[j + 1]
+                kelen = (kd[j + 2] << 8) | kd[j + 3]
+                ks_groups.append(grp)
+                j += 4 + kelen
+            result["key_share_groups"] = ks_groups
+
+    return result
+
+
+def _parse_server_hello(body: bytes) -> Optional[dict]:
+    """Parse a TLS ServerHello handshake body."""
+    result: dict = {"type": "ServerHello"}
+    i = 0
+    if i + 34 > len(body): return None
+    result["legacy_version"] = (body[i] << 8) | body[i + 1]
+    i += 34
+
+    if i >= len(body): return result
+    sid_len = body[i]; i += 1 + sid_len
+
+    if i + 3 > len(body): return result
+    result["cipher_suite"] = (body[i] << 8) | body[i + 1]; i += 2
+    i += 1  # compression method
+
+    if i + 2 > len(body): return result
+    ext_total = (body[i] << 8) | body[i + 1]; i += 2
+    exts = _parse_tls_extensions(body[i : i + ext_total])
+
+    # supported_versions (0x002B) in ServerHello = single selected version
+    if 0x002B in exts:
+        vd = exts[0x002B]
+        if len(vd) >= 2:
+            result["selected_version"] = (vd[0] << 8) | vd[1]
+
+    # key_share (0x0033) in ServerHello = single selected group
+    if 0x0033 in exts:
+        kd = exts[0x0033]
+        if len(kd) >= 2:
+            result["key_share_group"] = (kd[0] << 8) | kd[1]
+
+    return result
+
+
+def _extract_tls_handshakes(tcp_payload: bytes) -> list:
+    """
+    Walk a TCP segment payload and extract any TLS ClientHello / ServerHello
+    messages. Returns a list of parsed dicts.
+    """
+    records = []
+    i = 0
+    while i + 5 <= len(tcp_payload):
+        content_type = tcp_payload[i]
+        version      = (tcp_payload[i + 1] << 8) | tcp_payload[i + 2]
+        length       = (tcp_payload[i + 3] << 8) | tcp_payload[i + 4]
+
+        # Validate TLS record framing
+        if content_type not in (0x14, 0x15, 0x16, 0x17, 0x18):
+            break
+        if version not in (0x0300, 0x0301, 0x0302, 0x0303, 0x0304):
+            break
+        if length == 0 or i + 5 + length > len(tcp_payload):
+            break
+
+        payload = tcp_payload[i + 5 : i + 5 + length]
+        i += 5 + length
+
+        # Only interested in Handshake (0x16) records
+        if content_type != 0x16 or len(payload) < 4:
+            continue
+
+        hs_type = payload[0]
+        hs_len  = (payload[1] << 16) | (payload[2] << 8) | payload[3]
+        hs_body = payload[4 : 4 + hs_len]
+
+        if hs_type == 1:        # ClientHello
+            parsed = _parse_client_hello(hs_body)
+            if parsed:
+                records.append(parsed)
+        elif hs_type == 2:      # ServerHello
+            parsed = _parse_server_hello(hs_body)
+            if parsed:
+                records.append(parsed)
+
+    return records
+
+
+# ── The pcap command ─────────────────────────────────────────────────────────
+
+@main.command()
+@click.argument('pcap_path', type=click.Path(exists=True))
+@click.option('--verbose', '-v', is_flag=True,
+              help='Show offered cipher suites and SNI hostnames')
+@click.option('--format', '-f', 'output_format',
+              type=click.Choice(['json', 'html', 'markdown']),
+              default='json', show_default=True,
+              help='Output format')
+@click.option('--output', '-o', type=click.Path(),
+              help='Output file (default: stdout for JSON/Markdown, pcap_report.html for HTML)')
+@click.option('--open', 'open_browser', is_flag=True,
+              help='Open the HTML report in a browser after generation')
+def pcap(pcap_path: str, verbose: bool, output_format: str,
+         output: Optional[str], open_browser: bool):
+    """
+    Analyze a PCAP/PCAPNG file for cryptographic protocols.
+
+    Parses TLS handshakes, extracts cipher suites and key exchange
+    groups, classifies each as quantum-vulnerable or quantum-safe,
+    and detects PQC key exchange (ML-KEM/Kyber hybrid groups) in
+    TLS 1.3 sessions.
+
+    Output formats:
+      json      Canonical structured data (default)
+      html      Dark-themed HTML with gold accents
+      markdown  GitHub-flavored Markdown
+
+    PCAP_PATH: Path to .pcap or .pcapng capture file
+
+    Examples:
+        zetton pcap ./capture.pcap
+        zetton pcap ./capture.pcap --verbose
+        zetton pcap ./capture.pcap --format html -o report.html --open
+        zetton pcap ./capture.pcap --format markdown -o report.md
+        zetton pcap ./capture.pcap -o results.json
+    """
+    import logging
+    print_banner()
+    start_time = time.time()
+
+    console.print(f"[bold cyan]PCAP Crypto Analysis[/bold cyan] — {pcap_path}\n")
+
+    # ── Load PCAP ────────────────────────────────────────────────────────
+    try:
+        logging.getLogger("scapy").setLevel(logging.ERROR)
+        logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+        from scapy.utils import rdpcap
+        from scapy.layers.inet import TCP, IP
+        from scapy.layers.inet6 import IPv6
+    except ImportError:
+        console.print("[bold red]Error:[/bold red] scapy is required. "
+                      "Install with: [cyan]pip install scapy[/cyan]")
+        sys.exit(1)
+
+    with console.status(f"[cyan]Loading {pcap_path}…[/cyan]"):
+        try:
+            packets = rdpcap(pcap_path)
+        except Exception as e:
+            console.print(f"[bold red]Error reading PCAP:[/bold red] {e}")
+            sys.exit(1)
+
+    total_packets = len(packets)
+    console.print(f"[green]✓[/green] Loaded {total_packets:,} packets\n")
+
+    # ── Parse TLS handshakes from TCP payloads ────────────────────────────
+    client_hellos: list = []
+    server_hellos: list = []
+    conn_map: dict  = {}   # (src_ip, src_port, dst_ip, dst_port) → {client, server}
+
+    for pkt in packets:
+        if not pkt.haslayer(TCP):
+            continue
+        tcp     = pkt[TCP]
+        payload = bytes(tcp.payload)
+        if len(payload) < 6 or payload[0] != 0x16:
+            continue    # fast-path: not a TLS Handshake record
+
+        records = _extract_tls_handshakes(payload)
+        if not records:
+            continue
+
+        if pkt.haslayer(IP):
+            src_ip, dst_ip = pkt[IP].src, pkt[IP].dst
+        elif pkt.haslayer(IPv6):
+            src_ip, dst_ip = pkt[IPv6].src, pkt[IPv6].dst
+        else:
+            src_ip = dst_ip = "?"
+        src_port, dst_port = tcp.sport, tcp.dport
+
+        for rec in records:
+            conn_fwd = (src_ip, src_port, dst_ip, dst_port)
+            conn_rev = (dst_ip, dst_port, src_ip, src_port)
+            if rec["type"] == "ClientHello":
+                rec["_flow"] = f"{src_ip}:{src_port} → {dst_ip}:{dst_port}"
+                client_hellos.append(rec)
+                conn_map.setdefault(conn_fwd, {"client": None, "server": None})
+                conn_map[conn_fwd]["client"] = rec
+            elif rec["type"] == "ServerHello":
+                server_hellos.append(rec)
+                conn_map.setdefault(conn_rev, {"client": None, "server": None})
+                conn_map[conn_rev]["server"] = rec
+
+    if not client_hellos and not server_hellos:
+        console.print("[yellow]No TLS handshakes found in this capture.[/yellow]")
+        console.print("[dim]The file may not contain TLS traffic, or "
+                      "handshakes may be on non-standard ports.[/dim]")
+        elapsed = time.time() - start_time
+        console.print(f"\n[green]✓[/green] Analysis complete in {elapsed:.3f}s")
+        return
+
+    # ── Aggregate statistics ──────────────────────────────────────────────
+    # Cipher suites offered by all clients (ClientHello)
+    offered: dict = {}
+    for ch in client_hellos:
+        for cs in ch.get("cipher_suites", []):
+            offered[cs] = offered.get(cs, 0) + 1
+
+    # Cipher suites selected by servers (ServerHello)
+    selected: dict = {}
+    for sh in server_hellos:
+        cs = sh.get("cipher_suite")
+        if cs is not None:
+            selected[cs] = selected.get(cs, 0) + 1
+
+    # Named groups offered by clients
+    groups_offered: dict = {}
+    for ch in client_hellos:
+        for grp in ch.get("supported_groups", ch.get("key_share_groups", [])):
+            groups_offered[grp] = groups_offered.get(grp, 0) + 1
+
+    # Named group selected by each server (from key_share extension)
+    groups_selected: dict = {}
+    for sh in server_hellos:
+        grp = sh.get("key_share_group")
+        if grp is not None:
+            groups_selected[grp] = groups_selected.get(grp, 0) + 1
+
+    # TLS versions (prefer selected_version from ServerHello)
+    tls_versions: dict = {}
+    for sh in server_hellos:
+        ver = sh.get("selected_version") or sh.get("legacy_version")
+        if ver:
+            tls_versions[ver] = tls_versions.get(ver, 0) + 1
+
+    # SNI hostnames
+    sni_list = [ch["sni"] for ch in client_hellos if "sni" in ch]
+
+    # Convenience: which PQC groups were seen
+    pqc_groups = {g: _TLS_NAMED_GROUPS[g]
+                  for g in (set(groups_offered) | set(groups_selected))
+                  if g in _TLS_NAMED_GROUPS and _TLS_NAMED_GROUPS[g][2] == "SAFE"}
+
+    # ── Threat style helper (local) ───────────────────────────────────────
+    def _threat_style(threat: str) -> str:
+        return {
+            "CRITICAL": "[bold red]CRITICAL[/bold red]",
+            "HIGH":     "[yellow]HIGH[/yellow]",
+            "LOW":      "[cyan]LOW[/cyan]",
+            "SAFE":     "[bold green]SAFE[/bold green]",
+        }.get(threat, f"[dim]{threat}[/dim]")
+
+    # ── Summary table ─────────────────────────────────────────────────────
+    sum_table = Table(
+        title="PCAP Summary",
+        box=box.ROUNDED,
+        title_style="bold white",
+        border_style="dim",
+        show_header=False,
+        pad_edge=True,
+    )
+    sum_table.add_column("Metric", style="cyan", width=28)
+    sum_table.add_column("Value",  style="white")
+
+    sum_table.add_row("Total packets",           f"{total_packets:,}")
+    sum_table.add_row("TLS ClientHellos",         str(len(client_hellos)))
+    sum_table.add_row("TLS ServerHellos",         str(len(server_hellos)))
+    sum_table.add_row("Unique connections",       str(len(conn_map)))
+    sum_table.add_row("Cipher suites offered",    str(len(offered)))
+    sum_table.add_row("Cipher suites negotiated", str(len(selected)))
+    if sni_list:
+        sum_table.add_row("Unique SNI hostnames", str(len(set(sni_list))))
+    if pqc_groups:
+        sum_table.add_row("[green]PQC groups detected[/green]", str(len(pqc_groups)))
+
+    console.print(sum_table)
+    console.print()
+
+    # ── Negotiated cipher suites (ServerHello) ────────────────────────────
+    if selected:
+        cs_table = Table(
+            title="Negotiated Cipher Suites (ServerHello)",
+            box=box.ROUNDED,
+            title_style="bold white",
+            border_style="dim",
+        )
+        cs_table.add_column("Code",         style="dim",      width=8)
+        cs_table.add_column("Cipher Suite", style="cyan",     min_width=42)
+        cs_table.add_column("Key Exch.",    style="yellow",   width=10)
+        cs_table.add_column("Quantum Risk", justify="center", width=12)
+        cs_table.add_column("Sessions",     justify="right",  width=8)
+
+        for code, count in sorted(selected.items(), key=lambda x: -x[1]):
+            name, kex, threat = _TLS_CIPHER_SUITES.get(
+                code, (f"UNKNOWN_0x{code:04X}", "?", "UNKNOWN"))
+            cs_table.add_row(
+                f"0x{code:04X}", name, kex,
+                _threat_style(threat), str(count),
+            )
+        console.print(cs_table)
+        console.print()
+
+    # ── Offered cipher suites (ClientHello) — verbose only ───────────────
+    if verbose and offered:
+        off_table = Table(
+            title="Offered Cipher Suites (ClientHello)",
+            box=box.SIMPLE_HEAVY,
+            title_style="bold white",
+            border_style="dim",
+        )
+        off_table.add_column("Code",         style="dim",      width=8)
+        off_table.add_column("Cipher Suite", style="cyan",     min_width=42)
+        off_table.add_column("Key Exch.",    style="yellow",   width=10)
+        off_table.add_column("Quantum Risk", justify="center", width=12)
+        off_table.add_column("Count",        justify="right",  width=7)
+
+        for code, count in sorted(offered.items(), key=lambda x: -x[1]):
+            name, kex, threat = _TLS_CIPHER_SUITES.get(
+                code, (f"UNKNOWN_0x{code:04X}", "?", "UNKNOWN"))
+            off_table.add_row(
+                f"0x{code:04X}", name, kex,
+                _threat_style(threat), str(count),
+            )
+        console.print(off_table)
+        console.print()
+
+    # ── Key exchange groups ───────────────────────────────────────────────
+    all_groups = set(groups_offered) | set(groups_selected)
+    if all_groups:
+        grp_table = Table(
+            title="Key Exchange Groups",
+            box=box.ROUNDED,
+            title_style="bold white",
+            border_style="dim",
+        )
+        grp_table.add_column("Code",     style="dim",      width=8)
+        grp_table.add_column("Group",    style="cyan",     min_width=30)
+        grp_table.add_column("Type",     style="yellow",   width=12)
+        grp_table.add_column("Quantum",  justify="center", width=12)
+        grp_table.add_column("Offered",  justify="right",  width=8)
+        grp_table.add_column("Selected", justify="right",  width=8)
+
+        for grp in sorted(all_groups):
+            gname, gtype, threat = _TLS_NAMED_GROUPS.get(
+                grp, (f"group_0x{grp:04X}", "?", "UNKNOWN"))
+            q_cell = ("[bold green]PQC ✓[/bold green]"
+                      if threat == "SAFE" else _threat_style(threat))
+            grp_table.add_row(
+                f"0x{grp:04X}", gname, gtype, q_cell,
+                str(groups_offered.get(grp, 0)) or "—",
+                str(groups_selected.get(grp, 0)) if grp in groups_selected else "—",
+            )
+        console.print(grp_table)
+        console.print()
+
+    # ── PQC detection callout ─────────────────────────────────────────────
+    if pqc_groups:
+        console.print("[bold green]✓ Post-Quantum Key Exchange Detected:[/bold green]")
+        for grp, (gname, gtype, _) in pqc_groups.items():
+            sel_count = groups_selected.get(grp, 0)
+            off_count = groups_offered.get(grp, 0)
+            if sel_count:
+                status = f"[bold green]negotiated ({sel_count}×)[/bold green]"
+            else:
+                status = f"[yellow]offered only ({off_count}×)[/yellow]"
+            console.print(f"    [cyan]{gname}[/cyan] (0x{grp:04X}) — {status}")
+        console.print()
+
+    # ── TLS versions ─────────────────────────────────────────────────────
+    if tls_versions:
+        ver_table = Table(
+            title="TLS Versions Negotiated",
+            box=box.SIMPLE,
+            title_style="bold white",
+            border_style="dim",
+        )
+        ver_table.add_column("Version",  style="cyan")
+        ver_table.add_column("Sessions", style="white", justify="right")
+        ver_table.add_column("Status",   justify="center")
+
+        ver_status_map = {
+            0x0300: "[bold red]DEPRECATED (SSL 3.0)[/bold red]",
+            0x0301: "[bold red]DEPRECATED[/bold red]",
+            0x0302: "[bold red]DEPRECATED[/bold red]",
+            0x0303: "[yellow]LEGACY (TLS 1.2)[/yellow]",
+            0x0304: "[bold green]CURRENT (TLS 1.3)[/bold green]",
+        }
+        for ver, count in sorted(tls_versions.items(), reverse=True):
+            if count == 0:
+                continue
+            ver_table.add_row(
+                _TLS_VERSIONS.get(ver, f"0x{ver:04X}"),
+                str(count),
+                ver_status_map.get(ver, "[dim]UNKNOWN[/dim]"),
+            )
+        console.print(ver_table)
+        console.print()
+
+    # ── SNI hostnames — verbose only ──────────────────────────────────────
+    if verbose and sni_list:
+        sni_counts: dict = {}
+        for s in sni_list:
+            sni_counts[s] = sni_counts.get(s, 0) + 1
+        unique_sni = sorted(sni_counts)
+
+        sni_table = Table(
+            title=f"SNI Hostnames ({len(unique_sni)} unique)",
+            box=box.SIMPLE,
+            title_style="bold white",
+            border_style="dim",
+        )
+        sni_table.add_column("Hostname", style="cyan")
+        sni_table.add_column("Count",    style="dim", justify="right")
+        for hostname, count in sorted(sni_counts.items(), key=lambda x: -x[1])[:30]:
+            sni_table.add_row(hostname, str(count))
+        console.print(sni_table)
+        console.print()
+
+    # ── Quantum readiness assessment ──────────────────────────────────────
+    console.print("[bold]Quantum Readiness Assessment:[/bold]")
+
+    total_sessions  = max(len(server_hellos), 1)
+    vuln_sessions   = sum(
+        c for code, c in selected.items()
+        if _TLS_CIPHER_SUITES.get(code, ("", "", "UNKNOWN"))[2] in ("CRITICAL", "HIGH")
+    )
+    tls13_sessions  = sum(
+        c for code, c in selected.items()
+        if _TLS_CIPHER_SUITES.get(code, ("", "", ""))[1] == "TLS1.3"
+    )
+    pqc_sessions    = sum(groups_selected.get(g, 0) for g in pqc_groups)
+    vuln_pct        = 100 * vuln_sessions  / total_sessions
+    pqc_pct         = 100 * pqc_sessions   / total_sessions
+    tls13_pct       = 100 * tls13_sessions / total_sessions
+
+    if pqc_pct > 50:
+        readiness       = "GOOD"
+        r_color         = "green"
+        r_note          = "Majority of sessions use PQC key exchange"
+    elif pqc_pct > 0:
+        readiness       = "PARTIAL"
+        r_color         = "yellow"
+        r_note          = "PQC sessions detected; classical key exchange still dominates"
+    elif tls13_pct > 75 and vuln_pct == 0:
+        readiness       = "TRANSITIONING"
+        r_color         = "yellow"
+        r_note          = "TLS 1.3 only but no PQC key exchange detected yet"
+    elif vuln_pct > 50:
+        readiness       = "POOR"
+        r_color         = "red"
+        r_note          = "Majority of sessions use quantum-vulnerable cipher suites"
+    else:
+        readiness       = "MIXED"
+        r_color         = "yellow"
+        r_note          = "Mix of legacy and modern cipher suites"
+
+    console.print(f"    Overall:   [{r_color}]{readiness}[/{r_color}] — {r_note}")
+    if vuln_sessions:
+        console.print(
+            f"    Vulnerable:    [red]{vuln_sessions}[/red] session(s) with "
+            f"quantum-vulnerable cipher suites ({vuln_pct:.0f}%)")
+    if pqc_sessions:
+        console.print(
+            f"    PQC-protected: [bold green]{pqc_sessions}[/bold green] session(s) "
+            f"using hybrid PQC key exchange ({pqc_pct:.0f}%)")
+    if tls13_sessions:
+        console.print(
+            f"    TLS 1.3:       [cyan]{tls13_sessions}[/cyan] session(s) ({tls13_pct:.0f}%)")
+
+    elapsed = time.time() - start_time
+    console.print(f"\n[green]✓[/green] PCAP analysis complete in {elapsed:.3f}s")
+    console.print(
+        f"    {len(client_hellos)} ClientHello(s), "
+        f"{len(server_hellos)} ServerHello(s), "
+        f"{len(pqc_groups)} PQC group(s) detected")
+
+    # ── Build canonical report structure ─────────────────────────────────
+    def _cs_entry(code):
+        name, kex, threat = _TLS_CIPHER_SUITES.get(
+            code, (f"0x{code:04X}", "unknown", "UNKNOWN"))
+        return {"code": f"0x{code:04X}", "name": name,
+                "key_exchange": kex, "quantum_threat": threat}
+
+    def _grp_entry(grp):
+        gname, gtype, threat = _TLS_NAMED_GROUPS.get(
+            grp, (f"0x{grp:04X}", "unknown", "UNKNOWN"))
+        return {"code": f"0x{grp:04X}", "name": gname,
+                "type": gtype, "quantum_threat": threat}
+
+    pcap_report = {
+        "pcap": str(pcap_path),
+        "summary": {
+            "total_packets":      total_packets,
+            "client_hellos":      len(client_hellos),
+            "server_hellos":      len(server_hellos),
+            "unique_connections": len(conn_map),
+        },
+        "cipher_suites": {
+            "negotiated": {f"0x{k:04X}": {"count": v, **_cs_entry(k)}
+                           for k, v in selected.items()},
+            "offered":    {f"0x{k:04X}": {"count": v, **_cs_entry(k)}
+                           for k, v in offered.items()},
+        },
+        "key_exchange_groups": {
+            "offered":  {f"0x{g:04X}": {"count": c, **_grp_entry(g)}
+                         for g, c in groups_offered.items()},
+            "selected": {f"0x{g:04X}": {"count": c, **_grp_entry(g)}
+                         for g, c in groups_selected.items()},
+        },
+        "pqc_detected": [
+            {"code": f"0x{g:04X}", "name": v[0], "type": v[1],
+             "offered": groups_offered.get(g, 0),
+             "selected": groups_selected.get(g, 0)}
+            for g, v in pqc_groups.items()
+        ],
+        "tls_versions": {
+            _TLS_VERSIONS.get(v, f"0x{v:04X}"): c
+            for v, c in tls_versions.items() if c > 0
+        },
+        "sni_hostnames": sorted(set(sni_list)),
+        "assessment": {
+            "readiness":           readiness,
+            "vulnerable_sessions": vuln_sessions,
+            "pqc_sessions":        pqc_sessions,
+            "tls13_sessions":      tls13_sessions,
+        },
+    }
+
+    # ── Format & output ───────────────────────────────────────────────────
+    if output_format == "json":
+        rendered = json.dumps(pcap_report, indent=2)
+        if output:
+            with open(output, "w") as f:
+                f.write(rendered)
+            console.print(f"[dim]Report saved to: {output}[/dim]")
+        else:
+            print(rendered)
+
+    elif output_format == "html":
+        from zetton.formatters import format_html_pcap
+        rendered = format_html_pcap(pcap_report)
+        out_path = output or "pcap_report.html"
+        with open(out_path, "w") as f:
+            f.write(rendered)
+        console.print(f"\n[green]✓[/green] HTML report saved to [bold]{out_path}[/bold]")
+        if open_browser:
+            import webbrowser
+            webbrowser.open(f"file://{Path(out_path).resolve()}")
+
+    elif output_format == "markdown":
+        lines = [
+            f"# Zetton PCAP Report — `{pcap_path}`\n",
+            f"**Generated:** {__import__('datetime').datetime.now().isoformat(timespec='seconds')}\n",
+            "## PCAP Summary\n",
+            f"| Metric | Value |",
+            f"|--------|-------|",
+            f"| Total packets | {total_packets:,} |",
+            f"| TLS ClientHellos | {len(client_hellos)} |",
+            f"| TLS ServerHellos | {len(server_hellos)} |",
+            f"| Unique connections | {len(conn_map)} |",
+            f"| Cipher suites offered | {len(offered)} |",
+            f"| Cipher suites negotiated | {len(selected)} |",
+        ]
+        if sni_list:
+            lines.append(f"| Unique SNI hostnames | {len(set(sni_list))} |")
+        if pqc_groups:
+            lines.append(f"| PQC groups detected | {len(pqc_groups)} |")
+        lines.append("")
+
+        lines += [
+            "## Quantum Readiness Assessment\n",
+            f"**Overall:** {readiness}",
+        ]
+        if vuln_sessions:
+            lines.append(f"- Vulnerable sessions: {vuln_sessions}")
+        if pqc_sessions:
+            lines.append(f"- PQC-protected sessions: {pqc_sessions}")
+        if tls13_sessions:
+            lines.append(f"- TLS 1.3 sessions: {tls13_sessions}")
+        lines.append("")
+
+        if selected:
+            lines += [
+                "## Negotiated Cipher Suites\n",
+                "| Code | Cipher Suite | Key Exch. | Quantum Risk | Sessions |",
+                "|------|--------------|-----------|--------------|----------|",
+            ]
+            for code, count in sorted(selected.items(), key=lambda x: -x[1]):
+                name, kex, threat = _TLS_CIPHER_SUITES.get(
+                    code, (f"0x{code:04X}", "?", "UNKNOWN"))
+                lines.append(f"| 0x{code:04X} | {name} | {kex} | {threat} | {count} |")
+            lines.append("")
+
+        all_groups = set(groups_offered) | set(groups_selected)
+        if all_groups:
+            lines += [
+                "## Key Exchange Groups\n",
+                "| Code | Group | Type | Quantum | Offered | Selected |",
+                "|------|-------|------|---------|---------|----------|",
+            ]
+            for grp in sorted(all_groups):
+                gname, gtype, threat = _TLS_NAMED_GROUPS.get(
+                    grp, (f"0x{grp:04X}", "?", "UNKNOWN"))
+                q = "PQC ✓" if threat == "SAFE" else threat
+                lines.append(
+                    f"| 0x{grp:04X} | {gname} | {gtype} | {q} |"
+                    f" {groups_offered.get(grp, '—')} |"
+                    f" {groups_selected.get(grp, '—')} |"
+                )
+            lines.append("")
+
+        if tls_versions:
+            lines += [
+                "## TLS Versions Negotiated\n",
+                "| Version | Sessions |",
+                "|---------|----------|",
+            ]
+            for ver, count in sorted(tls_versions.items(), reverse=True):
+                lines.append(f"| {_TLS_VERSIONS.get(ver, f'0x{ver:04X}')} | {count} |")
+            lines.append("")
+
+        if sni_list:
+            lines += ["## SNI Hostnames Observed\n"]
+            for h in sorted(set(sni_list))[:50]:
+                lines.append(f"- `{h}`")
+            lines.append("")
+
+        rendered = "\n".join(lines)
+        if output:
+            with open(output, "w") as f:
+                f.write(rendered)
+            console.print(f"\n[green]✓[/green] Markdown report saved to [bold]{output}[/bold]")
+        else:
+            print(rendered)
+
+
 # ─── STATUS ─────────────────────────────────────────────────────────────────
 
 @main.command()
@@ -1824,7 +3302,8 @@ def status():
     table.add_row("Taint Analysis", "[green]✅ Ready[/green]", "Source-to-sink data flow tracking")
     table.add_row("PQC Analysis", "[green]✅ Ready[/green]", "NIST FIPS 203/204/205 compliance checking")
     table.add_row("Quantum Engine", "[yellow]🚧 In Progress[/yellow]", "Qiskit-based quantum circuits")
-    table.add_row("Report Generation", "📋 Planned", "Unified HTML/JSON/text reports")
+    table.add_row("PCAP Analysis",     "[green]✅ Ready[/green]", "TLS handshake parsing, cipher suite & PQC detection")
+    table.add_row("Report Generation", "[green]✅ Ready[/green]", "Unified HTML/JSON/Markdown reports with CBOM")
     
     console.print(table)
     console.print("\n[green]✓[/green] Zetton is operational!")
