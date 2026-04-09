@@ -173,6 +173,7 @@ def main(ctx):
         console.print("  [cyan]pqc[/cyan]        Post-quantum cryptography analysis")
         console.print("  [cyan]pcap[/cyan]       Analyze PCAP/PCAPNG for TLS crypto & PQC readiness")
         console.print("  [cyan]report[/cyan]     Unified report (HTML/JSON/Markdown) with CBOM")
+        console.print("  [cyan]auto[/cyan]       Auto-detect file type and run all analyses")
         console.print("  [cyan]status[/cyan]     Display feature status")
         console.print("  [cyan]config[/cyan]     Configure settings")
         console.print("  [cyan]quantum[/cyan]    Quantum backend management")
@@ -2306,6 +2307,205 @@ def _build_cbom(crypto_data: dict, forensics_data: dict, pqc_data: dict) -> dict
     }
 
 
+def _detect_file_type(file_path: str) -> str:
+    """Detect whether a file is a PCAP capture or a binary (ELF/PE/Mach-O)."""
+    path = Path(file_path)
+    ext = path.suffix.lower()
+
+    if ext in ('.pcap', '.pcapng', '.cap'):
+        return "pcap"
+
+    try:
+        with open(file_path, 'rb') as f:
+            magic = f.read(16)
+    except Exception:
+        return "binary"
+
+    if len(magic) < 4:
+        return "binary"
+
+    # PCAP / PCAPNG magic bytes
+    if magic[:4] in (b'\xd4\xc3\xb2\xa1', b'\xa1\xb2\xc3\xd4',
+                     b'\x4d\x3c\xb2\xa1', b'\xa1\xb2\x3c\x4d'):
+        return "pcap"
+    if magic[:4] == b'\x0a\x0d\x0d\x0a':
+        return "pcap"
+
+    # ELF
+    if magic[:4] == b'\x7fELF':
+        return "binary"
+    # PE (MZ)
+    if magic[:2] == b'MZ':
+        return "binary"
+    # Mach-O
+    if magic[:4] in (b'\xce\xfa\xed\xfe', b'\xcf\xfa\xed\xfe',
+                     b'\xca\xfe\xba\xbe', b'\xbe\xba\xfe\xca',
+                     b'\xfe\xed\xfa\xce', b'\xfe\xed\xfa\xcf'):
+        return "binary"
+
+    return "binary"
+
+
+def _report_collect_pcap(pcap_path: str) -> dict:
+    """Load and analyze a PCAP/PCAPNG file; return canonical report dict."""
+    import logging
+    logging.getLogger("scapy").setLevel(logging.ERROR)
+    logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
+    from scapy.utils import rdpcap
+    from scapy.layers.inet import TCP, IP
+    from scapy.layers.inet6 import IPv6
+
+    packets = rdpcap(pcap_path)
+    total_packets = len(packets)
+
+    client_hellos: list = []
+    server_hellos: list = []
+    conn_map: dict = {}
+
+    for pkt in packets:
+        if not pkt.haslayer(TCP):
+            continue
+        tcp = pkt[TCP]
+        payload = bytes(tcp.payload)
+        if len(payload) < 6 or payload[0] != 0x16:
+            continue
+
+        records = _extract_tls_handshakes(payload)
+        if not records:
+            continue
+
+        if pkt.haslayer(IP):
+            src_ip, dst_ip = pkt[IP].src, pkt[IP].dst
+        elif pkt.haslayer(IPv6):
+            src_ip, dst_ip = pkt[IPv6].src, pkt[IPv6].dst
+        else:
+            src_ip = dst_ip = "?"
+        src_port, dst_port = tcp.sport, tcp.dport
+
+        for rec in records:
+            conn_fwd = (src_ip, src_port, dst_ip, dst_port)
+            conn_rev = (dst_ip, dst_port, src_ip, src_port)
+            if rec["type"] == "ClientHello":
+                rec["_flow"] = f"{src_ip}:{src_port} → {dst_ip}:{dst_port}"
+                client_hellos.append(rec)
+                conn_map.setdefault(conn_fwd, {"client": None, "server": None})
+                conn_map[conn_fwd]["client"] = rec
+            elif rec["type"] == "ServerHello":
+                server_hellos.append(rec)
+                conn_map.setdefault(conn_rev, {"client": None, "server": None})
+                conn_map[conn_rev]["server"] = rec
+
+    offered: dict = {}
+    for ch in client_hellos:
+        for cs in ch.get("cipher_suites", []):
+            offered[cs] = offered.get(cs, 0) + 1
+
+    selected: dict = {}
+    for sh in server_hellos:
+        cs = sh.get("cipher_suite")
+        if cs is not None:
+            selected[cs] = selected.get(cs, 0) + 1
+
+    groups_offered: dict = {}
+    for ch in client_hellos:
+        for grp in ch.get("supported_groups", ch.get("key_share_groups", [])):
+            groups_offered[grp] = groups_offered.get(grp, 0) + 1
+
+    groups_selected: dict = {}
+    for sh in server_hellos:
+        grp = sh.get("key_share_group")
+        if grp is not None:
+            groups_selected[grp] = groups_selected.get(grp, 0) + 1
+
+    tls_versions: dict = {}
+    for sh in server_hellos:
+        ver = sh.get("selected_version") or sh.get("legacy_version")
+        if ver:
+            tls_versions[ver] = tls_versions.get(ver, 0) + 1
+
+    sni_list = [ch["sni"] for ch in client_hellos if "sni" in ch]
+
+    pqc_groups = {g: _TLS_NAMED_GROUPS[g]
+                  for g in (set(groups_offered) | set(groups_selected))
+                  if g in _TLS_NAMED_GROUPS and _TLS_NAMED_GROUPS[g][2] == "SAFE"}
+
+    total_sessions = max(len(server_hellos), 1)
+    vuln_sessions = sum(
+        c for code, c in selected.items()
+        if _TLS_CIPHER_SUITES.get(code, ("", "", "UNKNOWN"))[2] in ("CRITICAL", "HIGH")
+    )
+    tls13_sessions = sum(
+        c for code, c in selected.items()
+        if _TLS_CIPHER_SUITES.get(code, ("", "", ""))[1] == "TLS1.3"
+    )
+    pqc_sessions = sum(groups_selected.get(g, 0) for g in pqc_groups)
+    vuln_pct = 100 * vuln_sessions / total_sessions
+    pqc_pct = 100 * pqc_sessions / total_sessions
+    tls13_pct = 100 * tls13_sessions / total_sessions
+
+    if pqc_pct > 50:
+        readiness = "GOOD"
+    elif pqc_pct > 0:
+        readiness = "PARTIAL"
+    elif tls13_pct > 75 and vuln_pct == 0:
+        readiness = "TRANSITIONING"
+    elif vuln_pct > 50:
+        readiness = "POOR"
+    else:
+        readiness = "MIXED"
+
+    def _cs_entry(code):
+        name, kex, threat = _TLS_CIPHER_SUITES.get(
+            code, (f"0x{code:04X}", "unknown", "UNKNOWN"))
+        return {"code": f"0x{code:04X}", "name": name,
+                "key_exchange": kex, "quantum_threat": threat}
+
+    def _grp_entry(grp):
+        gname, gtype, threat = _TLS_NAMED_GROUPS.get(
+            grp, (f"0x{grp:04X}", "unknown", "UNKNOWN"))
+        return {"code": f"0x{grp:04X}", "name": gname,
+                "type": gtype, "quantum_threat": threat}
+
+    return {
+        "pcap": str(pcap_path),
+        "summary": {
+            "total_packets":      total_packets,
+            "client_hellos":      len(client_hellos),
+            "server_hellos":      len(server_hellos),
+            "unique_connections": len(conn_map),
+        },
+        "cipher_suites": {
+            "negotiated": {f"0x{k:04X}": {"count": v, **_cs_entry(k)}
+                           for k, v in selected.items()},
+            "offered":    {f"0x{k:04X}": {"count": v, **_cs_entry(k)}
+                           for k, v in offered.items()},
+        },
+        "key_exchange_groups": {
+            "offered":  {f"0x{g:04X}": {"count": c, **_grp_entry(g)}
+                         for g, c in groups_offered.items()},
+            "selected": {f"0x{g:04X}": {"count": c, **_grp_entry(g)}
+                         for g, c in groups_selected.items()},
+        },
+        "pqc_detected": [
+            {"code": f"0x{g:04X}", "name": v[0], "type": v[1],
+             "offered": groups_offered.get(g, 0),
+             "selected": groups_selected.get(g, 0)}
+            for g, v in pqc_groups.items()
+        ],
+        "tls_versions": {
+            _TLS_VERSIONS.get(v, f"0x{v:04X}"): c
+            for v, c in tls_versions.items() if c > 0
+        },
+        "sni_hostnames": sorted(set(sni_list)),
+        "assessment": {
+            "readiness":           readiness,
+            "vulnerable_sessions": vuln_sessions,
+            "pqc_sessions":        pqc_sessions,
+            "tls13_sessions":      tls13_sessions,
+        },
+    }
+
+
 # ── The report command ───────────────────────────────────────────────────────
 
 @main.command()
@@ -3282,6 +3482,272 @@ def pcap(pcap_path: str, verbose: bool, output_format: str,
             print(rendered)
 
 
+# ─── AUTO ────────────────────────────────────────────────────────────────────
+
+@main.command()
+@click.argument('file_path', type=click.Path(exists=True))
+@click.option('--format', '-f', 'output_format',
+              type=click.Choice(['html', 'json']),
+              default='html', show_default=True,
+              help='Output format')
+@click.option('--output', '-o', type=click.Path(),
+              help='Output file (default: <filename>_zetton_report.html)')
+@click.option('--open', 'open_browser', is_flag=True,
+              help='Auto-open the report in a browser after generation')
+def auto(file_path: str, output_format: str, output: Optional[str],
+         open_browser: bool):
+    """
+    Auto-detect file type and run all relevant analyses.
+
+    Detects whether the target is a PCAP capture or a binary (ELF/PE/Mach-O),
+    runs all relevant analyses with a Rich progress display, generates a
+    unified report, and prints a condensed terminal summary.
+
+    FILE_PATH: Path to the binary or PCAP file to analyze
+
+    Examples:
+        zetton auto ./binary
+        zetton auto ./capture.pcap
+        zetton auto ./binary --open
+        zetton auto ./binary --format json
+        zetton auto ./binary -o custom.html
+    """
+    import datetime
+    from zetton import __version__ as _ver
+    from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+
+    print_banner()
+    start_time = time.time()
+
+    path = Path(file_path)
+    file_type = _detect_file_type(file_path)
+
+    console.print(f"[bold cyan]Auto Analysis[/bold cyan] — {file_path}")
+    console.print(f"[dim]Detected type: [bold]{file_type.upper()}[/bold][/dim]\n")
+
+    ext = "json" if output_format == "json" else "html"
+    out_path = output or f"{path.stem}_zetton_report.{ext}"
+
+    # ── PCAP branch ──────────────────────────────────────────────────────────
+    if file_type == "pcap":
+        pcap_data: dict = {}
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task("  [cyan]PCAP / TLS analysis…[/cyan]", total=None)
+            try:
+                pcap_data = _report_collect_pcap(file_path)
+                progress.update(task,
+                                description="  [green]✓[/green] PCAP / TLS analysis complete")
+            except Exception as e:
+                progress.update(task,
+                                description=f"  [yellow]⚠[/yellow] PCAP analysis failed: {e}")
+                pcap_data = {"error": str(e)}
+            progress.stop_task(task)
+
+        # Render & save
+        if output_format == "json":
+            rendered = json.dumps(pcap_data, indent=2, default=str)
+            with open(out_path, "w") as f:
+                f.write(rendered)
+        else:
+            from zetton.formatters import format_html_pcap
+            rendered = format_html_pcap(pcap_data)
+            with open(out_path, "w") as f:
+                f.write(rendered)
+
+        # Terminal summary
+        assessment = pcap_data.get("assessment", {})
+        readiness = assessment.get("readiness", "UNKNOWN")
+        r_color = {"GOOD": "green", "PARTIAL": "cyan", "TRANSITIONING": "yellow",
+                   "MIXED": "yellow", "POOR": "red"}.get(readiness, "dim")
+
+        summary = pcap_data.get("summary", {})
+        vuln = assessment.get("vulnerable_sessions", 0)
+        pqc_s = assessment.get("pqc_sessions", 0)
+        tls13_s = assessment.get("tls13_sessions", 0)
+        pqc_detected = pcap_data.get("pqc_detected", [])
+
+        lines = [
+            f"[bold]Quantum Readiness:[/bold]  [{r_color}]{readiness}[/{r_color}]",
+            f"[dim]Packets analyzed:[/dim]   {summary.get('total_packets', 0):,}",
+            f"[dim]TLS sessions:[/dim]       {summary.get('server_hellos', 0)}",
+        ]
+        if vuln:
+            lines.append(f"[red]Vulnerable sessions:[/red]  {vuln}")
+        if pqc_s:
+            lines.append(f"[green]PQC sessions:[/green]       {pqc_s}")
+        if tls13_s:
+            lines.append(f"[cyan]TLS 1.3 sessions:[/cyan]   {tls13_s}")
+        if pqc_detected:
+            names = ", ".join(p["name"] for p in pqc_detected)
+            lines.append(f"[green]PQC groups:[/green]         {names}")
+
+        console.print()
+        console.print(Panel(
+            "\n".join(lines),
+            title="[bold yellow]Auto Analysis Summary[/bold yellow]",
+            border_style="yellow",
+            padding=(1, 2),
+        ))
+
+    # ── Binary branch ────────────────────────────────────────────────────────
+    else:
+        from zetton.core.binary import Binary
+
+        try:
+            binary = Binary.from_file(file_path)
+        except Exception as e:
+            console.print(f"[bold red]Error loading binary:[/bold red] {e}")
+            sys.exit(1)
+
+        analyses = [
+            ("analyze",   "Binary analysis",   lambda: _report_collect_binary(binary)),
+            ("crypto",    "Crypto detection",  lambda: _report_collect_crypto(binary)),
+            ("forensics", "Forensics",         lambda: _report_collect_forensics(binary)),
+            ("pqc",       "PQC analysis",      lambda: _report_collect_pqc(binary)),
+            ("cfg",       "CFG analysis",      lambda: _report_collect_cfg(binary)),
+            ("dataflow",  "Dataflow analysis", lambda: _report_collect_dataflow(binary)),
+        ]
+
+        results: dict = {}
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=False,
+        ) as progress:
+            task = progress.add_task("  Starting…", total=len(analyses))
+            for key, label, fn in analyses:
+                progress.update(task,
+                                description=f"  [cyan]Running {label}…[/cyan]")
+                try:
+                    results[key] = fn()
+                    count = ""
+                    if key == "crypto":
+                        count = f" ({len(results[key].get('findings', []))} findings)"
+                    elif key == "forensics":
+                        count = f" ({len(results[key].get('issues', []))} issue(s))"
+                    elif key == "cfg":
+                        count = f" ({len(results[key].get('functions', []))} functions)"
+                    elif key == "dataflow":
+                        count = f" ({len(results[key].get('flows', []))} flow(s))"
+                    console.print(f"  [green]✓[/green] {label}{count}")
+                except Exception as e:
+                    console.print(f"  [yellow]⚠[/yellow] {label} failed: {e}")
+                    results[key] = {"error": str(e)}
+                progress.advance(task)
+
+        cbom = _build_cbom(results.get("crypto", {}),
+                           results.get("forensics", {}),
+                           results.get("pqc", {}))
+
+        full_report = {
+            "meta": {
+                "tool":      "Zetton",
+                "version":   _ver,
+                "timestamp": datetime.datetime.now().isoformat(),
+                "binary":    str(file_path),
+                "format":    binary.format.name,
+            },
+            "cbom":      cbom,
+            "binary":    results.get("analyze", {}),
+            "crypto":    results.get("crypto", {}),
+            "forensics": results.get("forensics", {}),
+            "pqc":       results.get("pqc", {}),
+            "cfg":       results.get("cfg", {}),
+            "dataflow":  results.get("dataflow", {}),
+        }
+
+        if output_format == "json":
+            rendered = json.dumps(full_report, indent=2, default=str)
+            with open(out_path, "w") as f:
+                f.write(rendered)
+        else:
+            from zetton.formatters import format_html
+            rendered = format_html(full_report)
+            with open(out_path, "w") as f:
+                f.write(rendered)
+
+        # Terminal summary — prefer PQC migration score/grade over CBOM risk score
+        pqc_data    = results.get("pqc", {})
+        mig_score   = pqc_data.get("score")          # 0-100, None if analysis failed
+        mig_grade   = pqc_data.get("grade")          # A/B/C/D
+        vuln_algos      = cbom.get("quantum_vulnerable", [])
+        resistant_algos = cbom.get("quantum_resistant", [])
+        # Use PQC recs when available, fall back to CBOM recs
+        recs = (pqc_data.get("recommendations") or cbom.get("recommendations", []))[:3]
+        forensics_data = results.get("forensics", {})
+        critical_count = sum(
+            1 for i in forensics_data.get("issues", [])
+            if i.get("severity") == "CRITICAL"
+        )
+
+        if mig_score is not None:
+            # Drive readiness from PQC migration score (matches what the HTML report shows)
+            if mig_score >= 75:
+                readiness = "GOOD"
+                r_color   = "green"
+            elif mig_score >= 50:
+                readiness = "TRANSITIONING"
+                r_color   = "yellow"
+            else:
+                readiness = "POOR"
+                r_color   = "red"
+            score_label = f"Migration Score: {mig_score}/100  Grade {mig_grade}"
+        else:
+            # Fallback: derive from CBOM risk score
+            risk = cbom.get("risk_score", 0)
+            if risk == 0 and resistant_algos and not vuln_algos:
+                readiness = "GOOD"
+                r_color   = "green"
+            elif risk < 30:
+                readiness = "TRANSITIONING"
+                r_color   = "yellow"
+            else:
+                readiness = "POOR"
+                r_color   = "red"
+            score_label = f"Risk Score: {risk}/100"
+
+        lines = [
+            f"[bold]Quantum Readiness:[/bold]  [{r_color}]{readiness}[/{r_color}]"
+            f"   [dim]{score_label}[/dim]",
+            f"[bold]Critical Findings:[/bold]  {critical_count}",
+        ]
+        if vuln_algos:
+            lines.append(f"[red]Vulnerable Algorithms:[/red]   {', '.join(vuln_algos)}")
+        if resistant_algos:
+            lines.append(f"[green]Resistant Algorithms:[/green]    {', '.join(resistant_algos)}")
+        if recs:
+            lines.append("")
+            lines.append("[bold]Top Recommendations:[/bold]")
+            for i, rec in enumerate(recs, 1):
+                lines.append(f"  {i}. {rec}")
+
+        console.print()
+        console.print(Panel(
+            "\n".join(lines),
+            title="[bold yellow]Auto Analysis Summary[/bold yellow]",
+            border_style="yellow",
+            padding=(1, 2),
+        ))
+
+    # ── Final output ─────────────────────────────────────────────────────────
+    elapsed = time.time() - start_time
+    console.print(
+        f"\n[green]✓[/green] Report saved to [bold]{out_path}[/bold] in {elapsed:.2f}s"
+    )
+    if open_browser and output_format == "html":
+        import webbrowser
+        webbrowser.open(f"file://{Path(out_path).resolve()}")
+
+
 # ─── STATUS ─────────────────────────────────────────────────────────────────
 
 @main.command()
@@ -3304,6 +3770,7 @@ def status():
     table.add_row("Quantum Engine", "[yellow]🚧 In Progress[/yellow]", "Qiskit-based quantum circuits")
     table.add_row("PCAP Analysis",     "[green]✅ Ready[/green]", "TLS handshake parsing, cipher suite & PQC detection")
     table.add_row("Report Generation", "[green]✅ Ready[/green]", "Unified HTML/JSON/Markdown reports with CBOM")
+    table.add_row("Auto Command",      "[green]✅ Ready[/green]", "File-type detection + all-in-one analysis & report")
     
     console.print(table)
     console.print("\n[green]✓[/green] Zetton is operational!")
