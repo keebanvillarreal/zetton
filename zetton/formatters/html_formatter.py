@@ -7,40 +7,10 @@ Produces a single self-contained HTML file with no external dependencies.
 
 from __future__ import annotations
 
-import base64
 import html
-import io
-from pathlib import Path
 from typing import Any
 
-
-# ─── Logo: load at import time, recolor white → gold (#FFD700), embed as b64 ──
-
-def _build_logo_data_uri() -> str:
-    """
-    Load zetton_namelogowht.png, recolor every pixel to gold (#FFD700) while
-    preserving the original alpha channel, and return a base64 PNG data URI.
-    Falls back to "" if Pillow is unavailable or the file is missing.
-    """
-    logo_path = Path(__file__).parent.parent / "assets" / "zetton_namelogowht.png"
-    try:
-        from PIL import Image
-        img = Image.open(logo_path).convert("RGBA")
-        _, _, _, alpha = img.split()
-        # Solid gold for all RGB; alpha channel carries the logo shape unchanged
-        gold_r = Image.new("L", img.size, 255)   # R = 0xFF
-        gold_g = Image.new("L", img.size, 215)   # G = 0xD7
-        gold_b = Image.new("L", img.size, 0)     # B = 0x00
-        gold_img = Image.merge("RGBA", (gold_r, gold_g, gold_b, alpha))
-        buf = io.BytesIO()
-        gold_img.save(buf, format="PNG", optimize=True)
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        return f"data:image/png;base64,{b64}"
-    except Exception:
-        return ""
-
-
-_LOGO_DATA_URI: str = _build_logo_data_uri()
+from ._logo import LOGO_DATA_URI as _LOGO_DATA_URI, LOGO_HTML as _LOGO_HTML
 
 
 # ─── Color palette (mirrors CLI: bold yellow banner, cyan highlights) ────────
@@ -812,10 +782,7 @@ def format_html_pcap(report: dict) -> str:
     pcap_path = report.get("pcap", "unknown")
     timestamp = datetime.datetime.now().isoformat(timespec="seconds")
 
-    if _LOGO_DATA_URI:
-        logo_html = f'<img class="zetton-logo" src="{_LOGO_DATA_URI}" alt="Zetton">'
-    else:
-        logo_html = '<div style="color:var(--gold);font-size:22px;font-weight:bold;margin-bottom:.75rem;">ZETTON</div>'
+    logo_html = _LOGO_HTML
 
     meta_html = f"""
 <div class="meta-grid">
@@ -869,12 +836,7 @@ def format_html(report: dict) -> str:
     timestamp = meta.get("timestamp", "")
     version = meta.get("version", "")
 
-    if _LOGO_DATA_URI:
-        logo_html = (
-            f'<img class="zetton-logo" src="{_LOGO_DATA_URI}" alt="Zetton">'
-        )
-    else:
-        logo_html = '<div style="color:var(--gold);font-size:22px;font-weight:bold;margin-bottom:.75rem;">ZETTON</div>'
+    logo_html = _LOGO_HTML
 
     meta_html = f"""
 <div class="meta-grid">

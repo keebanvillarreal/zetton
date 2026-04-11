@@ -25,3 +25,11 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Generated reports
+examples/samples/*.html
+zetton-reports/
+
+# PCAP captures
+examples/samples/*.pcap
+*.pcap
