@@ -1,0 +1,47 @@
+COPYRIGHT
+
+Zetton - Quantum Software Reverse Engineering Framework
+
+Copyright (c) 2026 Keeban Villarreal
+All rights reserved.
+
+Zetton was created by Keeban Villarreal as part of research conducted
+with the UTSA Cyber Jedis Quantum Cybersecurity Research Interest Group
+at the University of Texas at San Antonio.
+
+LICENSING
+
+Zetton is available under a dual-license model:
+
+1. Open Source License (AGPL-3.0)
+
+   The source code in this repository is licensed under the
+   GNU Affero General Public License, Version 3 (AGPL-3.0).
+   See the LICENSE file for the full text.
+
+   Under this license, you are free to use, modify, and distribute
+   Zetton, provided that:
+   - Any modified versions are also released under AGPL-3.0
+   - If you run a modified version as a network service, you must
+     make the source code available to users of that service
+   - You include proper attribution to the original author
+
+2. Commercial License
+
+   Organizations that wish to use Zetton in proprietary or
+   closed-source products, embed it in commercial services,
+   or use it internally without AGPL-3.0 obligations, must
+   obtain a commercial license.
+
+   For commercial licensing inquiries, contact:
+   Keeban Villarreal
+   keeban.villarreal@my.utsa.edu
+
+ATTRIBUTION
+
+If you use Zetton in academic research, please cite:
+
+   Villarreal, K. (2026). Zetton: A Quantum-Aware Software Reverse
+   Engineering Framework. UTSA Cyber Jedis Quantum Cybersecurity
+   Research Interest Group. https://github.com/keebanvillarreal/zetton
+

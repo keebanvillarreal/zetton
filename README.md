@@ -383,9 +383,11 @@ Zetton is designed for security researchers working on:
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+AGPL-3.0 License - see [LICENSE](LICENSE) and [COPYRIGHT](COPYRIGHT) for details.
 
-This project is open source and welcomes contributions under the MIT license.
+Zetton is dual-licensed. Open source use is governed by the AGPL-3.0.
+Organizations requiring a commercial license should contact
+keeban.villarreal@my.utsa.edu
 
 ---
 

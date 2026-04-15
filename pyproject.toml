@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Quantum-Assisted Binary Analysis Framework - A quantum version of Ghidra"
 readme = "README.md"
 requires-python = ">=3.9"
-license = {text = "MIT"}
+license = {text = "AGPL-3.0-only"}
 authors = [
     {name = "Keeban", email = "keeban.villarreal@my.utsa.edu"}
 ]
