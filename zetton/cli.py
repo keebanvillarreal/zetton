@@ -2947,8 +2947,8 @@ def _extract_tls_handshakes(tcp_payload: bytes) -> list:
               help='Show offered cipher suites and SNI hostnames')
 @click.option('--format', '-f', 'output_format',
               type=click.Choice(['json', 'html', 'markdown']),
-              default='json', show_default=True,
-              help='Output format')
+              default=None, show_default=False,
+              help='Output format (default: Rich terminal display)')
 @click.option('--output', '-o', type=click.Path(),
               help='Output file (default: stdout for JSON/Markdown, pcap_report.html for HTML)')
 @click.option('--open', 'open_browser', is_flag=True,
@@ -2964,7 +2964,8 @@ def pcap(pcap_path: str, verbose: bool, output_format: str,
     TLS 1.3 sessions.
 
     Output formats:
-      json      Canonical structured data (default)
+      (none)    Rich terminal display (default)
+      json      Canonical structured data (-f json)
       html      Dark-themed HTML with gold accents
       markdown  GitHub-flavored Markdown
 
@@ -2973,9 +2974,10 @@ def pcap(pcap_path: str, verbose: bool, output_format: str,
     Examples:
         zetton pcap ./capture.pcap
         zetton pcap ./capture.pcap --verbose
+        zetton pcap ./capture.pcap -f json
         zetton pcap ./capture.pcap --format html -o report.html --open
         zetton pcap ./capture.pcap --format markdown -o report.md
-        zetton pcap ./capture.pcap -o results.json
+        zetton pcap ./capture.pcap -f json -o results.json
     """
     import logging
     print_banner()
