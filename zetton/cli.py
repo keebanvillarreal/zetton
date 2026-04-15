@@ -145,6 +145,578 @@ def format_size(size: int) -> str:
     return f"{size:,}"
 
 
+# ─── Cache render helpers ────────────────────────────────────────────────────
+
+def _render_analyze_cached(cached: dict) -> None:
+    """Render cached analyze results using Rich formatting."""
+    fmt_name = cached.get("format", "UNKNOWN")
+    arch_name = cached.get("architecture", "UNKNOWN")
+    endian = cached.get("endianness", "Unknown")
+
+    console.print(f"[green]Format detected:[/green] {fmt_name} ({cached.get('bits', '?')}-bit)")
+    console.print(f"[green]Architecture:[/green] {arch_name}")
+    console.print(f"[green]Endianness:[/green] {endian}\n")
+
+    info_table = Table(
+        title="Binary Information",
+        box=box.ROUNDED,
+        show_header=False,
+        title_style="bold white",
+        border_style="dim",
+        pad_edge=True,
+    )
+    info_table.add_column("Field", style="cyan", width=16)
+    info_table.add_column("Value", style="white")
+
+    info_table.add_row("Path", cached.get("path", "-"))
+    info_table.add_row("Format", fmt_name)
+    info_table.add_row("Architecture", arch_name)
+    info_table.add_row("Bits", str(cached.get("bits", "-")))
+    info_table.add_row("Entry Point", cached.get("entry_point", "-"))
+    info_table.add_row("Size", f"{format_size(cached.get('size', 0))} bytes")
+    info_table.add_row("MD5", cached.get("md5", "-"))
+    info_table.add_row("SHA-256", cached.get("sha256", "-"))
+    info_table.add_row("Sections", str(cached.get("sections_count", "-")))
+    info_table.add_row("Symbols", str(cached.get("symbols_count", "-")))
+    info_table.add_row("Imports", str(cached.get("imports_count", "-")))
+    info_table.add_row("Exports", str(cached.get("exports_count", "-")))
+    console.print(info_table)
+    console.print()
+
+    sections = cached.get("sections", [])
+    if sections:
+        sec_table = Table(
+            title="Sections",
+            box=box.SIMPLE_HEAVY,
+            title_style="bold white",
+            border_style="dim",
+        )
+        sec_table.add_column("Name", style="cyan", width=20)
+        sec_table.add_column("VAddr", style="yellow", justify="right")
+        sec_table.add_column("Size", style="white", justify="right")
+        sec_table.add_column("Entropy", style="magenta", justify="right")
+
+        for sec in sections:
+            ent = sec.get("entropy", 0.0)
+            ent_color = "green"
+            if ent > 6.0:
+                ent_color = "yellow"
+            if ent > 7.0:
+                ent_color = "red"
+            sec_table.add_row(
+                sec.get("name") or "(empty)",
+                sec.get("vaddr", "-"),
+                format_size(sec.get("size", 0)),
+                f"[{ent_color}]{ent:.4f}[/{ent_color}]",
+            )
+        console.print(sec_table)
+        console.print()
+
+    security = cached.get("security", {})
+    if security and "_error" not in security and fmt_name == "ELF":
+        console.print("[bold]Security Features:[/bold]")
+
+        def sec_status(val, true_text="Enabled", false_text="Disabled"):
+            if isinstance(val, str):
+                if val == "Full":
+                    return "[green]Full ✓[/green]"
+                elif val == "Partial":
+                    return "[yellow]Partial ⚠[/yellow]"
+                else:
+                    return f"[red]{val} ✗[/red]"
+            return f"[green]{true_text} ✓[/green]" if val else f"[red]{false_text} ✗[/red]"
+
+        console.print(f"    ├── PIE:     {sec_status(security.get('PIE', False))}")
+        console.print(f"    ├── NX:      {sec_status(security.get('NX', False))}")
+        console.print(f"    ├── RELRO:   {sec_status(security.get('RELRO', 'None'))}")
+        console.print(f"    ├── Canary:  {sec_status(security.get('Canary', False))}")
+        fortify = security.get("FORTIFY", False)
+        fortify_funcs = security.get("FORTIFY_funcs", [])
+        if fortify:
+            console.print(f"    └── FORTIFY: [green]Enabled ✓[/green] ({len(fortify_funcs)} functions)")
+        else:
+            console.print(f"    └── FORTIFY: [red]Disabled ✗[/red]")
+        console.print()
+
+
+def _render_crypto_cached(cached: dict) -> None:
+    """Render cached crypto results using Rich formatting."""
+    findings = cached.get("findings", [])
+    algo_counts = cached.get("algo_counts", {})
+
+    if findings:
+        console.print(f"[bold green]Found {len(findings)} cryptographic pattern(s)![/bold green]\n")
+
+        results_table = Table(
+            title="Cryptographic Findings",
+            box=box.ROUNDED,
+            title_style="bold white",
+            border_style="dim",
+        )
+        results_table.add_column("Algorithm", style="bold yellow")
+        results_table.add_column("Pattern", style="cyan")
+        results_table.add_column("Offset", style="white", justify="right")
+        results_table.add_column("Section", style="magenta")
+        results_table.add_column("Size", style="dim", justify="right")
+
+        for f in findings:
+            offset = f.get("offset", 0)
+            offset_str = f"0x{offset:08X}" if isinstance(offset, int) else str(offset)
+            results_table.add_row(
+                f.get("algorithm", "-"),
+                f.get("pattern", "-"),
+                offset_str,
+                f.get("section", "-"),
+                f"{f.get('match_size', 0)} bytes",
+            )
+        console.print(results_table)
+
+        console.print("\n[bold]Summary:[/bold]")
+        for algo, count in sorted(algo_counts.items()):
+            console.print(f"    {algo}: {count} pattern(s) detected")
+    else:
+        console.print("[dim]No cryptographic patterns found.[/dim]")
+
+
+def _render_forensics_cached(cached: dict) -> None:
+    """Render cached forensics results using Rich formatting."""
+    issues = cached.get("issues", [])
+    crypto_found = set(cached.get("crypto_found", []))
+    timestamps = cached.get("timestamps", [])
+
+    console.print("[bold]Timeline Analysis:[/bold]")
+    if timestamps:
+        for i, ts in enumerate(timestamps[:3]):
+            console.print(f"    Embedded timestamp at {ts.get('offset', '?')}: {ts.get('timestamp', '?')}")
+        if len(timestamps) > 3:
+            console.print(f"    [dim]... and more timestamp candidates[/dim]")
+    else:
+        console.print("    [dim]No embedded timestamps found in 2020-2030 range[/dim]")
+    console.print()
+
+    console.print("[bold]Crypto Weakness Analysis:[/bold]")
+    if issues:
+        for issue in issues:
+            sev = issue.get("severity", "INFO")
+            desc = issue.get("description", "")
+            offset = issue.get("offset", "0x0")
+            if sev == "CRITICAL":
+                console.print(f"    [bold red]✗ CRITICAL:[/bold red] {desc}")
+                console.print(f"              at offset {offset}")
+            elif sev == "WARNING":
+                console.print(f"    [yellow]⚠ WARNING:[/yellow]  {desc}")
+            else:
+                console.print(f"    [blue]ℹ INFO:[/blue]     {desc}")
+    else:
+        console.print("    [green]No weaknesses detected.[/green]")
+    console.print()
+
+    console.print("[bold]Quantum Threat Assessment:[/bold]")
+    quantum_threats = {
+        "aes_sbox": ("AES", "LOW", "Grover's provides only quadratic speedup; AES-256 remains secure"),
+        "aes_rcon": ("AES", "LOW", "AES with sufficient key length is quantum-resistant"),
+        "sha256": ("SHA-256", "LOW", "Grover's reduces security to ~128-bit; still adequate"),
+        "sha512": ("SHA-512", "LOW", "Remains secure against known quantum attacks"),
+        "md5": ("MD5", "MEDIUM", "Already broken classically; quantum makes it worse"),
+        "des": ("DES/3DES", "HIGH", "Already weak; quantum Grover's makes 56-bit key trivial"),
+        "rsa": ("RSA", "CRITICAL", "Shor's algorithm breaks RSA in polynomial time"),
+        "ecc": ("ECDSA/ECDH", "CRITICAL", "Shor's algorithm breaks elliptic curve crypto"),
+        "pqc_kyber": ("Kyber (ML-KEM)", "NONE", "Post-quantum secure (NIST FIPS 203)"),
+        "pqc_dilithium": ("Dilithium (ML-DSA)", "NONE", "Post-quantum secure (NIST FIPS 204)"),
+    }
+
+    if crypto_found:
+        threat_table = Table(box=box.SIMPLE_HEAVY, border_style="dim")
+        threat_table.add_column("Algorithm", style="cyan")
+        threat_table.add_column("Threat Level", justify="center")
+        threat_table.add_column("Assessment", style="dim")
+
+        for cat in sorted(crypto_found):
+            if cat in quantum_threats:
+                algo, level, desc = quantum_threats[cat]
+                level_style = {
+                    "NONE": "[bold green]NONE[/bold green]",
+                    "LOW": "[green]LOW[/green]",
+                    "MEDIUM": "[yellow]MEDIUM[/yellow]",
+                    "HIGH": "[bold yellow]HIGH[/bold yellow]",
+                    "CRITICAL": "[bold red]CRITICAL[/bold red]",
+                }.get(level, level)
+                threat_table.add_row(algo, level_style, desc)
+        console.print(threat_table)
+    else:
+        console.print("    [dim]No known cryptographic implementations detected.[/dim]")
+
+    console.print(f"\n[green]✓[/green] Forensics complete (cached)")
+    console.print(f"    {len(issues)} issue(s) found")
+
+
+def _render_cfg_cached(cached: dict) -> None:
+    """Render cached CFG results using Rich formatting."""
+    functions = cached.get("functions", [])
+
+    for func in functions:
+        console.print(
+            f"[bold]Function:[/bold] [cyan]{func.get('name', '?')}[/cyan] "
+            f"@ {func.get('address', '?')} ({func.get('size', 0)} bytes)"
+        )
+
+        info_table = Table(box=box.SIMPLE, show_header=False, border_style="dim", pad_edge=True)
+        info_table.add_column("Metric", style="white", width=24)
+        info_table.add_column("Value", style="yellow")
+
+        info_table.add_row("Instructions", str(func.get("instructions", "-")))
+        info_table.add_row("Basic blocks", str(func.get("basic_blocks", "-")))
+        info_table.add_row("Edges", str(func.get("edges", "-")))
+        info_table.add_row("Cyclomatic complexity", str(func.get("cyclomatic_complexity", "-")))
+        info_table.add_row("Loops detected", str(func.get("loops", "-")))
+        info_table.add_row("Call instructions", str(func.get("calls", "-")))
+        console.print(info_table)
+        console.print()
+
+    console.print(f"[green]✓[/green] CFG analysis complete (cached)")
+    console.print(f"    {len(functions)} function(s) analyzed")
+
+
+def _render_dataflow_cached(cached: dict) -> None:
+    """Render cached dataflow results using Rich formatting."""
+    sources = cached.get("sources", {})
+    sinks = cached.get("sinks", {})
+    flows = cached.get("flows", [])
+
+    if sources:
+        console.print("[bold]Taint Sources (imported):[/bold]")
+        src_table = Table(box=box.SIMPLE, border_style="dim")
+        src_table.add_column("Function", style="cyan")
+        src_table.add_column("Type", style="white")
+        for name, info in sorted(sources.items()):
+            src_table.add_row(name, info.get("description", "-"))
+        console.print(src_table)
+        console.print()
+    else:
+        console.print("[yellow]No known taint sources found in imports.[/yellow]\n")
+
+    if sinks:
+        console.print("[bold]Taint Sinks (imported):[/bold]")
+        sink_table = Table(box=box.SIMPLE, border_style="dim")
+        sink_table.add_column("Function", style="cyan")
+        sink_table.add_column("Risk", style="white")
+        sink_table.add_column("Severity", justify="center")
+        for name, info in sorted(sinks.items()):
+            sev = info.get("severity", "")
+            sev_style = {
+                "CRITICAL": "[bold red]CRITICAL[/bold red]",
+                "HIGH": "[red]HIGH[/red]",
+                "MEDIUM": "[yellow]MEDIUM[/yellow]",
+                "LOW": "[green]LOW[/green]",
+            }.get(sev, sev)
+            sink_table.add_row(name, info.get("description", "-"), sev_style)
+        console.print(sink_table)
+        console.print()
+    else:
+        console.print("[yellow]No known taint sinks found in imports.[/yellow]\n")
+
+    if flows:
+        flow_table = Table(
+            title="Detected Taint Flows",
+            box=box.ROUNDED,
+            title_style="bold white",
+            border_style="dim",
+        )
+        flow_table.add_column("#", style="dim", width=4)
+        flow_table.add_column("Source", style="cyan")
+        flow_table.add_column("→", style="dim", width=2)
+        flow_table.add_column("Sink", style="red")
+        flow_table.add_column("In Function", style="yellow")
+        flow_table.add_column("Severity", justify="center")
+        flow_table.add_column("Type", style="dim")
+
+        for f in flows:
+            sev = f.get("severity", "")
+            sev_style = {
+                "CRITICAL": "[bold red]CRITICAL[/bold red]",
+                "HIGH": "[red]HIGH[/red]",
+                "MEDIUM": "[yellow]MEDIUM[/yellow]",
+                "LOW": "[green]LOW[/green]",
+            }.get(sev, sev)
+            flow_table.add_row(
+                str(f.get("id", "-")),
+                f.get("source", "-"),
+                "→",
+                f.get("sink", "-"),
+                f.get("function", "-"),
+                sev_style,
+                str(f.get("type", "-")).replace("_", " "),
+            )
+        console.print(flow_table)
+
+        console.print(f"\n[bold]Vulnerability Summary:[/bold]")
+        crit = sum(1 for f in flows if f.get("severity") == "CRITICAL")
+        high = sum(1 for f in flows if f.get("severity") == "HIGH")
+        med = sum(1 for f in flows if f.get("severity") == "MEDIUM")
+        if crit > 0:
+            console.print(f"    [bold red]CRITICAL: {crit} flow(s)[/bold red] — "
+                          "Tainted data reaches dangerous sinks")
+        if high > 0:
+            console.print(f"    [red]HIGH: {high} flow(s)[/red]")
+        if med > 0:
+            console.print(f"    [yellow]MEDIUM: {med} flow(s)[/yellow]")
+
+    console.print(f"\n[green]✓[/green] Data flow analysis complete (cached)")
+
+
+def _render_pcap_cached(cached: dict) -> None:
+    """Render cached PCAP results using Rich formatting."""
+    def _threat_style(threat: str) -> str:
+        return {
+            "CRITICAL": "[bold red]CRITICAL[/bold red]",
+            "HIGH":     "[yellow]HIGH[/yellow]",
+            "LOW":      "[cyan]LOW[/cyan]",
+            "SAFE":     "[bold green]SAFE[/bold green]",
+        }.get(threat, f"[dim]{threat}[/dim]")
+
+    summary = cached.get("summary", {})
+    negotiated = cached.get("cipher_suites", {}).get("negotiated", {})
+    offered = cached.get("cipher_suites", {}).get("offered", {})
+    kex_offered = cached.get("key_exchange_groups", {}).get("offered", {})
+    kex_selected = cached.get("key_exchange_groups", {}).get("selected", {})
+    pqc_detected = cached.get("pqc_detected", [])
+    tls_versions = cached.get("tls_versions", {})
+    sni_hostnames = cached.get("sni_hostnames", [])
+    assessment = cached.get("assessment", {})
+
+    sum_table = Table(
+        title="PCAP Summary",
+        box=box.ROUNDED,
+        title_style="bold white",
+        border_style="dim",
+        show_header=False,
+        pad_edge=True,
+    )
+    sum_table.add_column("Metric", style="cyan", width=28)
+    sum_table.add_column("Value",  style="white")
+    sum_table.add_row("Total packets",           f"{summary.get('total_packets', 0):,}")
+    sum_table.add_row("TLS ClientHellos",         str(summary.get("client_hellos", 0)))
+    sum_table.add_row("TLS ServerHellos",         str(summary.get("server_hellos", 0)))
+    sum_table.add_row("Unique connections",       str(summary.get("unique_connections", 0)))
+    sum_table.add_row("Cipher suites offered",    str(len(offered)))
+    sum_table.add_row("Cipher suites negotiated", str(len(negotiated)))
+    if sni_hostnames:
+        sum_table.add_row("Unique SNI hostnames", str(len(set(sni_hostnames))))
+    if pqc_detected:
+        sum_table.add_row("[green]PQC groups detected[/green]", str(len(pqc_detected)))
+    console.print(sum_table)
+    console.print()
+
+    if negotiated:
+        cs_table = Table(
+            title="Negotiated Cipher Suites (ServerHello)",
+            box=box.ROUNDED,
+            title_style="bold white",
+            border_style="dim",
+        )
+        cs_table.add_column("Code",         style="dim",      width=8)
+        cs_table.add_column("Cipher Suite", style="cyan",     min_width=42)
+        cs_table.add_column("Key Exch.",    style="yellow",   width=10)
+        cs_table.add_column("Quantum Risk", justify="center", width=12)
+        cs_table.add_column("Sessions",     justify="right",  width=8)
+        for code_str, info in sorted(negotiated.items(), key=lambda x: -x[1].get("count", 0)):
+            cs_table.add_row(
+                info.get("code", code_str),
+                info.get("name", code_str),
+                info.get("key_exchange", "?"),
+                _threat_style(info.get("quantum_threat", "UNKNOWN")),
+                str(info.get("count", 0)),
+            )
+        console.print(cs_table)
+        console.print()
+
+    all_groups = set(kex_offered) | set(kex_selected)
+    if all_groups:
+        grp_table = Table(
+            title="Key Exchange Groups",
+            box=box.ROUNDED,
+            title_style="bold white",
+            border_style="dim",
+        )
+        grp_table.add_column("Code",     style="dim",      width=8)
+        grp_table.add_column("Group",    style="cyan",     min_width=30)
+        grp_table.add_column("Type",     style="yellow",   width=12)
+        grp_table.add_column("Quantum",  justify="center", width=12)
+        grp_table.add_column("Offered",  justify="right",  width=8)
+        grp_table.add_column("Selected", justify="right",  width=8)
+        for grp_str in sorted(all_groups):
+            off_info = kex_offered.get(grp_str, {})
+            sel_info = kex_selected.get(grp_str, {})
+            info = off_info or sel_info
+            threat = info.get("quantum_threat", "UNKNOWN")
+            q_cell = ("[bold green]PQC ✓[/bold green]"
+                      if threat == "SAFE" else _threat_style(threat))
+            grp_table.add_row(
+                info.get("code", grp_str),
+                info.get("name", grp_str),
+                info.get("type", "?"),
+                q_cell,
+                str(off_info.get("count", 0)) if off_info else "—",
+                str(sel_info.get("count", 0)) if sel_info else "—",
+            )
+        console.print(grp_table)
+        console.print()
+
+    if pqc_detected:
+        console.print("[bold green]✓ Post-Quantum Key Exchange Detected:[/bold green]")
+        for entry in pqc_detected:
+            sel_count = entry.get("selected", 0)
+            off_count = entry.get("offered", 0)
+            if sel_count:
+                status = f"[bold green]negotiated ({sel_count}×)[/bold green]"
+            else:
+                status = f"[yellow]offered only ({off_count}×)[/yellow]"
+            console.print(f"    [cyan]{entry.get('name', '?')}[/cyan] "
+                          f"({entry.get('code', '?')}) — {status}")
+        console.print()
+
+    if tls_versions:
+        ver_table = Table(
+            title="TLS Versions Negotiated",
+            box=box.SIMPLE,
+            title_style="bold white",
+            border_style="dim",
+        )
+        ver_table.add_column("Version",  style="cyan")
+        ver_table.add_column("Sessions", style="white", justify="right")
+        ver_table.add_column("Status",   justify="center")
+        ver_status_map = {
+            "SSL 3.0":  "[bold red]DEPRECATED (SSL 3.0)[/bold red]",
+            "TLS 1.0":  "[bold red]DEPRECATED[/bold red]",
+            "TLS 1.1":  "[bold red]DEPRECATED[/bold red]",
+            "TLS 1.2":  "[yellow]LEGACY (TLS 1.2)[/yellow]",
+            "TLS 1.3":  "[bold green]CURRENT (TLS 1.3)[/bold green]",
+        }
+        for ver_name, count in sorted(tls_versions.items()):
+            if count == 0:
+                continue
+            ver_table.add_row(ver_name, str(count),
+                              ver_status_map.get(ver_name, "[dim]UNKNOWN[/dim]"))
+        console.print(ver_table)
+        console.print()
+
+    readiness = assessment.get("readiness", "UNKNOWN")
+    r_color_map = {"GOOD": "green", "PARTIAL": "yellow", "TRANSITIONING": "yellow",
+                   "POOR": "red", "MIXED": "yellow"}
+    r_color = r_color_map.get(readiness, "white")
+    r_notes = {
+        "GOOD":          "Majority of sessions use PQC key exchange",
+        "PARTIAL":       "PQC sessions detected; classical key exchange still dominates",
+        "TRANSITIONING": "TLS 1.3 only but no PQC key exchange detected yet",
+        "POOR":          "Majority of sessions use quantum-vulnerable cipher suites",
+        "MIXED":         "Mix of legacy and modern cipher suites",
+    }
+    console.print("[bold]Quantum Readiness Assessment:[/bold]")
+    console.print(f"    Overall:   [{r_color}]{readiness}[/{r_color}] — "
+                  f"{r_notes.get(readiness, '')}")
+    vuln_sessions = assessment.get("vulnerable_sessions", 0)
+    pqc_sessions = assessment.get("pqc_sessions", 0)
+    tls13_sessions = assessment.get("tls13_sessions", 0)
+    total_sessions = max(summary.get("server_hellos", 1), 1)
+    if vuln_sessions:
+        console.print(f"    Vulnerable:    [red]{vuln_sessions}[/red] session(s) with "
+                      f"quantum-vulnerable cipher suites "
+                      f"({100*vuln_sessions//total_sessions}%)")
+    if pqc_sessions:
+        console.print(f"    PQC-protected: [bold green]{pqc_sessions}[/bold green] session(s) "
+                      f"using hybrid PQC key exchange "
+                      f"({100*pqc_sessions//total_sessions}%)")
+    if tls13_sessions:
+        console.print(f"    TLS 1.3:       [cyan]{tls13_sessions}[/cyan] session(s) "
+                      f"({100*tls13_sessions//total_sessions}%)")
+
+    console.print(f"\n[green]✓[/green] PCAP analysis complete (cached)")
+    console.print(f"    {summary.get('client_hellos', 0)} ClientHello(s), "
+                  f"{summary.get('server_hellos', 0)} ServerHello(s), "
+                  f"{len(pqc_detected)} PQC group(s) detected")
+
+
+def _render_pqc_cached(cached: dict) -> None:
+    """Render cached PQC results using Rich formatting."""
+    found_classical = cached.get("vulnerable", {})
+    found_pqc = cached.get("pqc_algorithms", {})
+    safe_names = cached.get("safe", {})
+    score = cached.get("score", 0)
+    grade = cached.get("grade", "D")
+    sphincs_detected = cached.get("sphincs_detected", False)
+
+    if found_classical:
+        console.print("[bold red]⚠  Quantum-Vulnerable Cryptography Detected:[/bold red]\n")
+        vuln_table = Table(box=box.ROUNDED, border_style="red")
+        vuln_table.add_column("Algorithm", style="bold yellow")
+        vuln_table.add_column("Quantum Threat", justify="center")
+        vuln_table.add_column("Attack Vector", style="white")
+        for cat, info in found_classical.items():
+            threat_style = {
+                "CRITICAL": "[bold red]CRITICAL[/bold red]",
+                "HIGH": "[yellow]HIGH[/yellow]",
+                "MEDIUM": "[white]MEDIUM[/white]",
+            }.get(info.get("threat", ""), info.get("threat", ""))
+            vuln_table.add_row(info.get("name", cat), threat_style, info.get("attack", "-"))
+        console.print(vuln_table)
+        console.print()
+
+    if found_pqc:
+        console.print("[bold green]✓ Post-Quantum Cryptography Detected:[/bold green]\n")
+        pqc_table = Table(box=box.ROUNDED, border_style="green")
+        pqc_table.add_column("Algorithm", style="bold cyan")
+        pqc_table.add_column("Standard", style="yellow")
+        pqc_table.add_column("Type", style="white")
+        pqc_table.add_column("Status", justify="center")
+        for cat, info in found_pqc.items():
+            pqc_table.add_row(
+                info.get("name", cat), info.get("standard", "-"),
+                info.get("type", "-"), "[bold green]SECURE[/bold green]"
+            )
+        console.print(pqc_table)
+        console.print()
+
+    if safe_names:
+        console.print("[bold]Quantum-Safe Classical Cryptography:[/bold]\n")
+        seen = set()
+        for cat, name in safe_names.items():
+            if name not in seen:
+                seen.add(name)
+                console.print(f"    [green]✓[/green] {name}")
+        console.print()
+
+    console.print("[bold]Migration Readiness Assessment:[/bold]\n")
+    if score >= 75:
+        score_style = "[bold green]"
+    elif score >= 50:
+        score_style = "[yellow]"
+    elif score >= 25:
+        score_style = "[yellow]"
+    else:
+        score_style = "[bold red]"
+
+    total_pqc_standards = 3
+    implemented = len(found_pqc)
+    vulnerable = len(found_classical)
+
+    console.print(f"    Migration Score: {score_style}{score}/100 (Grade: {grade})[/]")
+    console.print(f"    PQC Algorithms Implemented: {implemented}/{total_pqc_standards}")
+    console.print(f"    Vulnerable Algorithms Remaining: {vulnerable}")
+
+    if found_classical or implemented < total_pqc_standards:
+        console.print(f"\n[bold]Recommendations:[/bold]")
+        for cat, info in found_classical.items():
+            console.print(f"    [red]→[/red] {info.get('recommendation', '')}")
+        if "pqc_kyber" not in found_pqc:
+            console.print(f"    [yellow]→[/yellow] Implement ML-KEM (FIPS 203) for key encapsulation")
+        if "pqc_dilithium" not in found_pqc:
+            console.print(f"    [yellow]→[/yellow] Implement ML-DSA (FIPS 204) for digital signatures")
+        if not sphincs_detected:
+            console.print(f"    [yellow]→[/yellow] Consider SLH-DSA (FIPS 205) for hash-based signatures")
+
+    console.print(f"\n[green]✓[/green] PQC analysis complete (cached)")
+
+
 # ─── CLI Commands ───────────────────────────────────────────────────────────
 
 @click.group(invoke_without_command=True)
@@ -178,6 +750,7 @@ def main(ctx):
         console.print("  [cyan]pcap[/cyan]       Analyze PCAP/PCAPNG for TLS crypto & PQC readiness")
         console.print("  [cyan]report[/cyan]     Unified report (HTML/JSON/Markdown) with CBOM")
         console.print("  [cyan]auto[/cyan]       Auto-detect file type and run all analyses")
+        console.print("  [cyan]cache[/cyan]      Manage analysis cache (list/info/clear)")
         console.print("  [cyan]status[/cyan]     Display feature status")
         console.print("  [cyan]config[/cyan]     Configure settings")
         console.print("  [cyan]quantum[/cyan]    Quantum backend management")
@@ -192,7 +765,8 @@ def main(ctx):
               default='auto', help='Binary format (auto-detect by default)')
 @click.option('--output', '-o', type=click.Path(), help='Output file (JSON)')
 @click.option('--verbose', '-v', is_flag=True, help='Verbose output')
-def analyze(binary_path: str, format: str, output: Optional[str], verbose: bool):
+@click.option('--fresh', is_flag=True, help='Skip cache and force a new analysis')
+def analyze(binary_path: str, format: str, output: Optional[str], verbose: bool, fresh: bool):
     """
     Analyze a binary file.
     
@@ -207,18 +781,29 @@ def analyze(binary_path: str, format: str, output: Optional[str], verbose: bool)
         zetton analyze suspicious.bin -v -o report.json
     """
     from zetton.core.binary import Binary, BinaryFormat
-    
+    from zetton.storage import StorageManager
+
     print_banner()
     start_time = time.time()
-    
+
+    # ── Cache check ──────────────────────────────────────────────────────
+    storage = StorageManager()
+    if not fresh:
+        cached = storage.get_analysis(binary_path, "analyze")
+        if cached is not None:
+            console.print(f"[bold cyan]Loading binary:[/bold cyan] {binary_path}")
+            console.print("[dim]Using cached results (use --fresh to re-analyze)[/dim]\n")
+            _render_analyze_cached(cached)
+            return
+
     console.print(f"[bold cyan]Loading binary:[/bold cyan] {binary_path}")
-    
+
     try:
         binary = Binary.from_file(binary_path)
     except Exception as e:
         console.print(f"[bold red]Error loading binary:[/bold red] {e}")
         sys.exit(1)
-    
+
     # ── Format & Architecture ────────────────────────────────────────────
     fmt_name = binary.format.name
     arch_name = binary.architecture.name
@@ -362,18 +947,39 @@ def analyze(binary_path: str, format: str, output: Optional[str], verbose: bool)
     # ── Timing ───────────────────────────────────────────────────────────
     elapsed = time.time() - start_time
     console.print(f"[green]✓[/green] Analysis complete in {elapsed:.3f}s")
-    
+
+    # ── Save to cache ────────────────────────────────────────────────────
+    _security = ({k: v for k, v in detect_elf_security(binary).items() if not k.startswith("_")}
+                 if binary.format == BinaryFormat.ELF else {})
+    _cache_results = {
+        "path": str(binary.path),
+        "format": fmt_name,
+        "architecture": arch_name,
+        "bits": binary.bits,
+        "endianness": endian,
+        "entry_point": f"0x{binary.entry_point:08X}",
+        "size": len(binary.raw_data),
+        "md5": binary.md5,
+        "sha256": binary.sha256,
+        "sections_count": len(binary.sections),
+        "symbols_count": len(binary.symbols),
+        "imports_count": len(binary.imports),
+        "exports_count": len(binary.exports),
+        "sections": [
+            {"name": s.name, "vaddr": hex(s.virtual_address),
+             "size": s.raw_size, "entropy": round(s.entropy, 4)}
+            for s in binary.sections
+        ],
+        "security": _security,
+    }
+    storage.save_analysis(binary_path, "analyze", _cache_results,
+                          file_type=binary.format.name)
+
     # ── JSON Output ──────────────────────────────────────────────────────
     if output:
         report = binary.info()
-        report["security"] = {k: v for k, v in detect_elf_security(binary).items() 
-                              if not k.startswith("_")} if binary.format == BinaryFormat.ELF else {}
-        report["sections"] = [
-            {"name": s.name, "vaddr": hex(s.virtual_address), 
-             "size": s.raw_size, "entropy": round(s.entropy, 4)}
-            for s in binary.sections
-        ]
-        
+        report["security"] = _security
+        report["sections"] = _cache_results["sections"]
         with open(output, "w") as f:
             json.dump(report, f, indent=2, default=str)
         console.print(f"[dim]Report saved to: {output}[/dim]")
@@ -387,7 +993,8 @@ def analyze(binary_path: str, format: str, output: Optional[str], verbose: bool)
 @click.option('--algorithms', '-a', multiple=True,
               help='Specific algorithms to detect (aes, sha256, des, etc.)')
 @click.option('--output', '-o', type=click.Path(), help='Output file (JSON)')
-def crypto(binary_path: str, quantum: bool, algorithms: tuple, output: Optional[str]):
+@click.option('--fresh', is_flag=True, help='Skip cache and force a new analysis')
+def crypto(binary_path: str, quantum: bool, algorithms: tuple, output: Optional[str], fresh: bool):
     """
     Detect cryptographic algorithms in a binary.
     
@@ -404,22 +1011,32 @@ def crypto(binary_path: str, quantum: bool, algorithms: tuple, output: Optional[
     """
     from zetton.core.binary import Binary
     from zetton.crypto.constants import CRYPTO_CONSTANTS
-    
+    from zetton.storage import StorageManager
+
     print_banner()
     start_time = time.time()
-    
+
     console.print(f"[bold cyan]Crypto Detection[/bold cyan] — {binary_path}")
-    
+
+    # ── Cache check ──────────────────────────────────────────────────────
+    storage = StorageManager()
+    if not fresh:
+        cached = storage.get_analysis(binary_path, "crypto")
+        if cached is not None:
+            console.print("[dim]Using cached results (use --fresh to re-analyze)[/dim]\n")
+            _render_crypto_cached(cached)
+            return
+
     if quantum:
         console.print("[magenta]⚛  Quantum-assisted search enabled (Grover's algorithm)[/magenta]")
     console.print()
-    
+
     try:
         binary = Binary.from_file(binary_path)
     except Exception as e:
         console.print(f"[bold red]Error loading binary:[/bold red] {e}")
         sys.exit(1)
-    
+
     raw = binary.raw_data
     findings = []
     
@@ -533,7 +1150,17 @@ def crypto(binary_path: str, quantum: bool, algorithms: tuple, output: Optional[
     
     elapsed = time.time() - start_time
     console.print(f"\n[green]✓[/green] Crypto scan complete in {elapsed:.3f}s")
-    
+
+    # Build algo_counts for caching (may not exist if findings is empty)
+    algo_counts: dict = {}
+    for f in findings:
+        algo_counts[f["algorithm"]] = algo_counts.get(f["algorithm"], 0) + 1
+
+    # ── Save to cache ────────────────────────────────────────────────────
+    storage.save_analysis(binary_path, "crypto",
+                          {"findings": findings, "algo_counts": algo_counts},
+                          file_type=binary.format.name)
+
     if output:
         with open(output, "w") as f:
             json.dump({"findings": findings, "binary": str(binary_path)}, f, indent=2)
@@ -546,10 +1173,11 @@ def crypto(binary_path: str, quantum: bool, algorithms: tuple, output: Optional[
 @click.argument('binary_path', type=click.Path(exists=True))
 @click.option('--output', '-o', type=click.Path(), help='Output file (JSON/HTML)')
 @click.option('--verbose', '-v', is_flag=True, help='Verbose output')
-def forensics(binary_path: str, output: Optional[str], verbose: bool):
+@click.option('--fresh', is_flag=True, help='Skip cache and force a new analysis')
+def forensics(binary_path: str, output: Optional[str], verbose: bool, fresh: bool):
     """
     Digital forensics analysis.
-    
+
     Extracts timestamps, detects crypto weaknesses (hardcoded keys,
     ECB mode, weak PRNG), and performs quantum threat assessment.
     
@@ -561,24 +1189,34 @@ def forensics(binary_path: str, output: Optional[str], verbose: bool):
     """
     from zetton.core.binary import Binary
     from zetton.crypto.constants import CRYPTO_CONSTANTS
-    
+    from zetton.storage import StorageManager
+
     print_banner()
     start_time = time.time()
-    
+
     console.print(f"[bold cyan]Digital Forensics[/bold cyan] — {binary_path}\n")
-    
+
+    # ── Cache check ──────────────────────────────────────────────────────
+    storage = StorageManager()
+    if not fresh:
+        cached = storage.get_analysis(binary_path, "forensics")
+        if cached is not None:
+            console.print("[dim]Using cached results (use --fresh to re-analyze)[/dim]\n")
+            _render_forensics_cached(cached)
+            return
+
     try:
         binary = Binary.from_file(binary_path)
     except Exception as e:
         console.print(f"[bold red]Error loading binary:[/bold red] {e}")
         sys.exit(1)
-    
+
     raw = binary.raw_data
     issues = []
-    
+
     # ── Timestamp Extraction ─────────────────────────────────────────────
     console.print("[bold]Timeline Analysis:[/bold]")
-    
+
     import struct, datetime
     
     if binary.format.name == "ELF":
@@ -596,15 +1234,18 @@ def forensics(binary_path: str, output: Optional[str], verbose: bool):
     ts_min = int(datetime.datetime(2020, 1, 1).timestamp())
     ts_max = int(datetime.datetime(2030, 12, 31).timestamp())
     timestamp_count = 0
-    
+    timestamps_found = []
+
     for i in range(0, len(raw) - 4, 4):
         val = struct.unpack("<I", raw[i:i+4])[0]
         if ts_min <= val <= ts_max:
             timestamp_count += 1
+            dt = datetime.datetime.fromtimestamp(val)
             if timestamp_count <= 3:  # Show first 3
-                dt = datetime.datetime.fromtimestamp(val)
                 console.print(f"    Embedded timestamp at 0x{i:08X}: {dt.isoformat()}")
-    
+            if len(timestamps_found) < 10:
+                timestamps_found.append({"offset": hex(i), "timestamp": dt.isoformat()})
+
     if timestamp_count > 3:
         console.print(f"    [dim]... and {timestamp_count - 3} more timestamp candidates[/dim]")
     elif timestamp_count == 0:
@@ -727,12 +1368,20 @@ def forensics(binary_path: str, output: Optional[str], verbose: bool):
     elapsed = time.time() - start_time
     console.print(f"\n[green]✓[/green] Forensics complete in {elapsed:.3f}s")
     console.print(f"    {len(issues)} issue(s) found")
-    
+
+    # ── Save to cache ────────────────────────────────────────────────────
+    _cache_results = {
+        "issues": [{"severity": s, "description": d, "offset": hex(o)} for s, d, o in issues],
+        "crypto_found": list(crypto_found),
+        "timestamps": timestamps_found,
+    }
+    storage.save_analysis(binary_path, "forensics", _cache_results,
+                          file_type=binary.format.name)
+
     if output:
         report = {
             "binary": str(binary_path),
-            "issues": [{"severity": s, "description": d, "offset": hex(o)} for s, d, o in issues],
-            "crypto_found": list(crypto_found),
+            **_cache_results,
         }
         with open(output, "w") as f:
             json.dump(report, f, indent=2)
@@ -833,16 +1482,17 @@ def list_backends():
 @click.option('--export', '-e', 'export_fmt', type=click.Choice(['dot', 'json']),
               default=None, help='Export format')
 @click.option('--output', '-o', type=click.Path(), help='Output file')
-def cfg(binary_path: str, func_name: Optional[str], export_fmt: Optional[str], 
-        output: Optional[str]):
+@click.option('--fresh', is_flag=True, help='Skip cache and force a new analysis')
+def cfg(binary_path: str, func_name: Optional[str], export_fmt: Optional[str],
+        output: Optional[str], fresh: bool):
     """
     Control flow graph analysis.
-    
+
     Disassembles functions and builds control flow graphs showing
     basic blocks, branches, loops, and complexity metrics.
-    
+
     BINARY_PATH: Path to the binary file to analyze
-    
+
     Examples:
         zetton cfg ./sample_network_vuln
         zetton cfg ./sample_network_vuln --function classify_packet
@@ -850,12 +1500,22 @@ def cfg(binary_path: str, func_name: Optional[str], export_fmt: Optional[str],
     """
     from zetton.core.binary import Binary
     from zetton.analyzers.disasm import Disassembler, Instruction
-    
+    from zetton.storage import StorageManager
+
     print_banner()
     start_time = time.time()
-    
+
     console.print(f"[bold cyan]Control Flow Analysis[/bold cyan] — {binary_path}\n")
-    
+
+    # ── Cache check ──────────────────────────────────────────────────────
+    storage = StorageManager()
+    if not fresh:
+        cached = storage.get_analysis(binary_path, "cfg")
+        if cached is not None:
+            console.print("[dim]Using cached results (use --fresh to re-analyze)[/dim]\n")
+            _render_cfg_cached(cached)
+            return
+
     try:
         binary = Binary.from_file(binary_path)
     except Exception as e:
@@ -1014,7 +1674,11 @@ def cfg(binary_path: str, func_name: Optional[str], export_fmt: Optional[str],
     elapsed = time.time() - start_time
     console.print(f"[green]✓[/green] CFG analysis complete in {elapsed:.3f}s")
     console.print(f"    {len(all_func_data)} function(s) analyzed")
-    
+
+    # ── Save to cache ────────────────────────────────────────────────────
+    storage.save_analysis(binary_path, "cfg", {"functions": all_func_data},
+                          file_type=binary.format.name)
+
     # Export
     if output and export_fmt == "dot":
         with open(output, "w") as f:
@@ -1213,31 +1877,43 @@ def _generate_dot(func_name: str, blocks: dict, edges: list, loops: list) -> str
 @click.option('--sinks', type=str, default=None,
               help='Comma-separated taint sinks (system,exec,printf,sprintf,strcpy)')
 @click.option('--output', '-o', type=click.Path(), help='Output file (JSON)')
-def dataflow(binary_path: str, taint: bool, sources: Optional[str], 
-             sinks: Optional[str], output: Optional[str]):
+@click.option('--fresh', is_flag=True, help='Skip cache and force a new analysis')
+def dataflow(binary_path: str, taint: bool, sources: Optional[str],
+             sinks: Optional[str], output: Optional[str], fresh: bool):
     """
     Data flow and taint analysis.
-    
+
     Tracks data propagation through the binary. With --taint, traces
     data from untrusted sources (network, environment, files) to
     dangerous sinks (system calls, format strings, memory writes).
-    
+
     BINARY_PATH: Path to the binary file to analyze
-    
+
     Examples:
         zetton dataflow --taint ./sample_network_vuln
         zetton dataflow --taint --sources recv,getenv ./sample_network_vuln
     """
     from zetton.core.binary import Binary
-    
+    from zetton.storage import StorageManager
+
     print_banner()
     start_time = time.time()
-    
+
     console.print(f"[bold cyan]Data Flow Analysis[/bold cyan] — {binary_path}")
+
+    # ── Cache check ──────────────────────────────────────────────────────
+    storage = StorageManager()
+    if not fresh:
+        cached = storage.get_analysis(binary_path, "dataflow")
+        if cached is not None:
+            console.print("[dim]Using cached results (use --fresh to re-analyze)[/dim]\n")
+            _render_dataflow_cached(cached)
+            return
+
     if taint:
         console.print("[magenta]Taint tracking enabled[/magenta]")
     console.print()
-    
+
     try:
         binary = Binary.from_file(binary_path)
     except Exception as e:
@@ -1345,6 +2021,7 @@ def dataflow(binary_path: str, taint: bool, sources: Optional[str],
     
     # Cross-reference analysis: find potential taint flows
     # This does call-graph based flow analysis using the disassembler
+    flows: list = []
     if taint and found_sources and found_sinks:
         console.print("[bold]Potential Taint Flows:[/bold]\n")
         
@@ -1540,13 +2217,21 @@ def dataflow(binary_path: str, taint: bool, sources: Optional[str],
     
     elapsed = time.time() - start_time
     console.print(f"\n[green]✓[/green] Data flow analysis complete in {elapsed:.3f}s")
-    
+
+    # ── Save to cache ────────────────────────────────────────────────────
+    _cache_results = {
+        "sources": {k: {"description": v["description"]} for k, v in found_sources.items()},
+        "sinks": {k: {"description": v["description"], "severity": v["severity"]}
+                  for k, v in found_sinks.items()},
+        "flows": flows,
+    }
+    storage.save_analysis(binary_path, "dataflow", _cache_results,
+                          file_type=binary.format.name)
+
     if output:
         report = {
             "binary": str(binary_path),
-            "sources": {k: v for k, v in found_sources.items()},
-            "sinks": {k: {"description": v["description"], "severity": v["severity"]} 
-                     for k, v in found_sinks.items()},
+            **_cache_results,
         }
         with open(output, "w") as f:
             json.dump(report, f, indent=2, default=str)
@@ -1559,28 +2244,39 @@ def dataflow(binary_path: str, taint: bool, sources: Optional[str],
 @click.argument('binary_path', type=click.Path(exists=True))
 @click.option('--compliance', '-c', is_flag=True, help='Check NIST FIPS compliance')
 @click.option('--output', '-o', type=click.Path(), help='Output file (JSON)')
-def pqc(binary_path: str, compliance: bool, output: Optional[str]):
+@click.option('--fresh', is_flag=True, help='Skip cache and force a new analysis')
+def pqc(binary_path: str, compliance: bool, output: Optional[str], fresh: bool):
     """
     Post-quantum cryptography analysis.
-    
+
     Detects both classical (quantum-vulnerable) and post-quantum
     (quantum-resistant) cryptographic implementations. Assesses
     migration readiness and NIST FIPS 203/204/205 compliance.
-    
+
     BINARY_PATH: Path to the binary file to analyze
-    
+
     Examples:
         zetton pqc ./sample_pqc
         zetton pqc ./sample_pqc --compliance
     """
     from zetton.core.binary import Binary
     from zetton.crypto.constants import CRYPTO_CONSTANTS
-    
+    from zetton.storage import StorageManager
+
     print_banner()
     start_time = time.time()
-    
+
     console.print(f"[bold cyan]Post-Quantum Cryptography Analysis[/bold cyan] — {binary_path}\n")
-    
+
+    # ── Cache check ──────────────────────────────────────────────────────
+    storage = StorageManager()
+    if not fresh:
+        cached = storage.get_analysis(binary_path, "pqc")
+        if cached is not None:
+            console.print("[dim]Using cached results (use --fresh to re-analyze)[/dim]\n")
+            _render_pqc_cached(cached)
+            return
+
     try:
         binary = Binary.from_file(binary_path)
     except Exception as e:
@@ -1796,13 +2492,25 @@ def pqc(binary_path: str, compliance: bool, output: Optional[str]):
     
     elapsed = time.time() - start_time
     console.print(f"\n[green]✓[/green] PQC analysis complete in {elapsed:.3f}s")
-    
+
+    # ── Save to cache ────────────────────────────────────────────────────
+    _cache_results = {
+        "vulnerable": {k: v for k, v in found_classical.items()},
+        "pqc_algorithms": {k: v for k, v in found_pqc.items()},
+        "safe": {k: v["name"] for k, v in found_safe.items()},
+        "score": score,
+        "grade": grade,
+        "sphincs_detected": sphincs_detected,
+    }
+    storage.save_analysis(binary_path, "pqc", _cache_results,
+                          file_type=binary.format.name)
+
     if output:
         report = {
             "binary": str(binary_path),
-            "vulnerable": {k: v for k, v in found_classical.items()},
-            "pqc": {k: v for k, v in found_pqc.items()},
-            "safe": {k: v["name"] for k, v in found_safe.items()},
+            "vulnerable": _cache_results["vulnerable"],
+            "pqc": _cache_results["pqc_algorithms"],
+            "safe": _cache_results["safe"],
             "score": score,
             "grade": grade,
         }
@@ -2953,8 +3661,9 @@ def _extract_tls_handshakes(tcp_payload: bytes) -> list:
               help='Output file (default: stdout for JSON/Markdown, pcap_report.html for HTML)')
 @click.option('--open', 'open_browser', is_flag=True,
               help='Open the HTML report in a browser after generation')
+@click.option('--fresh', is_flag=True, help='Skip cache and force a new analysis')
 def pcap(pcap_path: str, verbose: bool, output_format: str,
-         output: Optional[str], open_browser: bool):
+         output: Optional[str], open_browser: bool, fresh: bool):
     """
     Analyze a PCAP/PCAPNG file for cryptographic protocols.
 
@@ -2980,10 +3689,21 @@ def pcap(pcap_path: str, verbose: bool, output_format: str,
         zetton pcap ./capture.pcap -f json -o results.json
     """
     import logging
+    from zetton.storage import StorageManager
+
     print_banner()
     start_time = time.time()
 
     console.print(f"[bold cyan]PCAP Crypto Analysis[/bold cyan] — {pcap_path}\n")
+
+    # ── Cache check ──────────────────────────────────────────────────────
+    storage = StorageManager()
+    if not fresh:
+        cached = storage.get_analysis(pcap_path, "pcap")
+        if cached is not None:
+            console.print("[dim]Using cached results (use --fresh to re-analyze)[/dim]\n")
+            _render_pcap_cached(cached)
+            return
 
     # ── Load PCAP ────────────────────────────────────────────────────────
     try:
@@ -3380,6 +4100,9 @@ def pcap(pcap_path: str, verbose: bool, output_format: str,
         },
     }
 
+    # ── Save to cache ────────────────────────────────────────────────────
+    storage.save_analysis(pcap_path, "pcap", pcap_report, file_type="pcap")
+
     # ── Format & output ───────────────────────────────────────────────────
     if output_format == "json":
         rendered = json.dumps(pcap_report, indent=2)
@@ -3752,6 +4475,129 @@ def auto(file_path: str, output_format: str, output: Optional[str],
     if open_browser and output_format == "html":
         import webbrowser
         webbrowser.open(f"file://{Path(out_path).resolve()}")
+
+
+# ─── CACHE ──────────────────────────────────────────────────────────────────
+
+@main.group("cache")
+def cache_group():
+    """Manage the Zetton analysis cache (~/.zetton/zetton.db)."""
+    pass
+
+
+@cache_group.command("list")
+def cache_list():
+    """List all cached binaries and their analyses."""
+    from zetton.storage import StorageManager
+
+    storage = StorageManager()
+    binaries = storage.list_binaries()
+
+    if not binaries:
+        console.print("[dim]No cached analyses found.[/dim]")
+        console.print("[dim]Run an analysis command to populate the cache.[/dim]")
+        return
+
+    table = Table(
+        title=f"Cached Binaries ({len(binaries)})",
+        box=box.ROUNDED,
+        title_style="bold yellow",
+        border_style="dim",
+    )
+    table.add_column("Name", style="cyan")
+    table.add_column("Type", style="yellow", width=8)
+    table.add_column("Size", style="dim", justify="right", width=12)
+    table.add_column("Analyses", style="magenta", justify="right", width=9)
+    table.add_column("Last Seen", style="dim", width=20)
+    table.add_column("SHA-256 (short)", style="dim", width=16)
+
+    for b in binaries:
+        size_str = f"{b['size']:,}" if b["size"] else "—"
+        table.add_row(
+            b["name"],
+            b["file_type"],
+            size_str,
+            str(b["analysis_count"]),
+            b["last_seen"][:19].replace("T", " "),
+            b["hash"][:12] + "…",
+        )
+
+    console.print(table)
+    console.print(f"\n[dim]DB: {StorageManager().db_path}[/dim]")
+
+
+@cache_group.command("info")
+@click.argument("binary_path", type=click.Path(exists=True))
+def cache_info(binary_path: str):
+    """Show cached analyses for a specific file."""
+    from zetton.storage import StorageManager
+
+    storage = StorageManager()
+    analyses = storage.get_all_analyses(binary_path)
+
+    if not analyses:
+        console.print(f"[yellow]No cached analyses for:[/yellow] {binary_path}")
+        console.print("[dim]Run an analysis command first, or use --fresh to force a run.[/dim]")
+        return
+
+    file_hash = StorageManager.compute_hash(binary_path)
+    console.print(f"[bold]File:[/bold] {binary_path}")
+    console.print(f"[dim]SHA-256: {file_hash}[/dim]\n")
+
+    table = Table(
+        title=f"Cached Analyses ({len(analyses)})",
+        box=box.ROUNDED,
+        title_style="bold white",
+        border_style="dim",
+    )
+    table.add_column("Analysis Type", style="cyan", width=14)
+    table.add_column("Created", style="dim", width=20)
+    table.add_column("Updated", style="dim", width=20)
+
+    for a in analyses:
+        table.add_row(
+            a["analysis_type"],
+            a["created_at"][:19].replace("T", " "),
+            a["updated_at"][:19].replace("T", " "),
+        )
+
+    console.print(table)
+
+
+@cache_group.command("clear")
+@click.argument("binary_path", required=False, type=click.Path())
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+def cache_clear(binary_path: Optional[str], yes: bool):
+    """
+    Clear the analysis cache.
+
+    If BINARY_PATH is given, clear only that file's cached analyses.
+    Otherwise clear the entire cache (requires confirmation).
+    """
+    from zetton.storage import StorageManager
+
+    storage = StorageManager()
+
+    if binary_path:
+        path = Path(binary_path)
+        if not path.exists():
+            console.print(f"[red]File not found:[/red] {binary_path}")
+            return
+        n = storage.clear_cache(binary_path)
+        console.print(f"[green]✓[/green] Cleared {n} analysis record(s) for [cyan]{path.name}[/cyan]")
+    else:
+        binaries = storage.list_binaries()
+        if not binaries:
+            console.print("[dim]Cache is already empty.[/dim]")
+            return
+        if not yes:
+            console.print(f"[yellow]This will delete {len(binaries)} binary record(s) "
+                          f"and all analyses from the cache.[/yellow]")
+            if not click.confirm("Continue?"):
+                console.print("[dim]Cancelled.[/dim]")
+                return
+        n = storage.clear_cache()
+        console.print(f"[green]✓[/green] Cache cleared — {n} analysis record(s) removed")
 
 
 # ─── STATUS ─────────────────────────────────────────────────────────────────
